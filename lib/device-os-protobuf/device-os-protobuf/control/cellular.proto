@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package particle.ctrl.cellular;
+option java_package = "io.particle.firmwareprotos.ctrl.cellular";
+
+import "control/extensions.proto";
+
+/**
+ * SIM card types.
+ *
+ * The Boron 2G/3G and Boron LTE can use either the built-in MFF2 embedded Particle SIM card or an external nano SIM card in the SIM card connector.
+ *
+ * Note: The values of this enum should match the values defined by the `SimType` enum in the firmware.
+ */
+enum SimType {
+  INVALID_SIM_TYPE = 0; // Invalid
+  INTERNAL = 1; // Built-in MFF2 embedded Particle SIM
+  EXTERNAL = 2; // External nano SIM card
+}
+
+/**
+ * Access point settings for 3rd party SIM credentials for the Cellular network.
+ */
+message AccessPoint {
+  string apn = 1; // APN
+  string user = 2; // Username
+  string password = 3; // Password
+  bool use_defaults = 4; // If `true`, it will restore the defaules
+}
+
+/**
+ * Set access point settings.
+ */
+message SetAccessPointRequest {
+  option (type_id) = 550; // CTRL_REQUEST_CELLULAR_SET_ACCESS_POINT
+  SimType sim_type = 1;
+  AccessPoint access_point = 2;
+}
+
+message SetAccessPointReply {
+}
+
+/**
+ * Get access point settings.
+ */
+message GetAccessPointRequest {
+  option (type_id) = 551; // CTRL_REQUEST_CELLULAR_GET_ACCESS_POINT
+  SimType sim_type = 1;
+}
+
+message GetAccessPointReply {
+  AccessPoint access_point = 1;
+}
+
+/**
+ * Set active SIM card.
+ *
+ * Note: The device needs to be reset in order for the settings to take effect.
+ */
+message SetActiveSimRequest {
+  option (type_id) = 552; // CTRL_REQUEST_CELLULAR_SET_ACTIVE_SIM
+  SimType sim_type = 1;
+}
+
+message SetActiveSimReply {
+}
+
+/**
+ * Get active SIM card.
+ */
+message GetActiveSimRequest {
+  option (type_id) = 553; // CTRL_REQUEST_CELLULAR_GET_ACTIVE_SIM
+}
+
+message GetActiveSimReply {
+  SimType sim_type = 1;
+}
+
+/**
+ * Get ICCID.
+ */
+message GetIccidRequest {
+  option (type_id) = 554; // CTRL_REQUEST_CELLULAR_GET_ICCID
+}
+
+message GetIccidReply {
+  string iccid = 1; // SIM ICCID
+  string imei = 2; // RADIO IMEI
+}

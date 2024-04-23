@@ -1,0 +1,151 @@
+syntax = "proto3";
+package particle.ctrl;
+
+import "control/extensions.proto";
+import "control/common.proto";
+import "control/network_old.proto";
+
+option java_package = "io.particle.firmwareprotos.ctrl";
+
+//
+// New network interface API
+//
+
+enum InterfaceConfigurationSource {
+  NONE = 0;
+  DHCP = 1;
+  STATIC = 2;
+  SLAAC = 3;
+  DHCPV6 = 4;
+}
+  
+
+message InterfaceAddress {
+  IpAddress address = 1;
+  uint32 prefix_length = 2;
+  // TODO: state, scope, lifetimes, etc.
+}
+
+message Ipv4Config {
+  repeated InterfaceAddress addresses = 1;
+  // On P2P links
+  Ipv4Address peer = 2;
+  // Temporary, will be moved to routing table
+  Ipv4Address gateway = 3 [(nanopb).proto3 = false];
+
+  repeated Ipv4Address dns = 4;
+  InterfaceConfigurationSource source = 5;
+}
+
+message Ipv6Config {
+  repeated InterfaceAddress addresses = 1;
+  repeated Ipv6Address dns = 2;
+  InterfaceConfigurationSource source = 3;
+  // Temporary, will be moved to routing table
+  Ipv6Address gateway = 4 [(nanopb).proto3 = false];
+}
+
+// Direct mapping to if_flags_t
+enum InterfaceFlag {
+  option allow_alias = true;
+  IFF_NONE = 0x00;
+  IFF_UP = 0x01;
+  IFF_BROADCAST = 0x02;
+  IFF_DEBUG = 0x04;
+  IFF_LOOPBACK = 0x08;
+  IFF_POINTTOPOINT = 0x10;
+  IFF_RUNNING = 0x40;
+  IFF_LOWER_UP = 0x40;
+  IFF_NOARP = 0x80;
+  IFF_PROMISC = 0x100;
+  IFF_ALLMULTI = 0x200;
+  IFF_MULTICAST = 0x8000;
+  IFF_NOND6 = 0x10000;
+}
+
+// Direct mapping to if_xflags_t
+enum InterfaceExtFlag {
+  IFXF_NONE = 0x00;
+  IFXF_WOL = 0x10;
+  IFXF_AUTOCONF6 = 0x20;
+  IFXF_DHCP = 0x10000;
+  IFXF_DHCP6 = 0x20000;
+  IFXF_AUTOIP = 0x40000;
+}
+
+enum InterfaceType {
+  INVALID_INTERFACE_TYPE = 0;
+  LOOPBACK = 0x01;
+  THREAD = 0x02;
+  ETHERNET = 0x04;
+  WIFI = 0x08;
+  PPP = 0x10;
+}
+
+// Operation state of the interface
+message Interface {
+  uint32 index = 1;
+  string name = 2;
+  InterfaceType type = 3;
+  uint32 flags = 4; // InterfaceFlag
+  uint32 ext_flags = 5; // InterfaceExtFlag
+  Ipv4Config ipv4_config = 6;
+  Ipv6Config ipv6_config = 7;
+  bytes hw_address = 8 [(nanopb).max_size = 8];
+  uint32 mtu = 9;
+  uint32 metric = 10;
+
+  bytes profile = 11; // Network 'profile' reference (e.g. SSID)
+}
+
+message InterfaceEntry {
+  uint32 index = 1;
+  string name = 2;
+  InterfaceType type = 3;
+}
+
+message GetInterfaceListRequest {
+  option (type_id) = 400; // CTRL_REQUEST_NETWORK_GET_INTERFACE_LIST
+}
+
+message GetInterfaceListReply {
+  repeated InterfaceEntry interfaces = 1;
+}
+
+message GetInterfaceRequest {
+  option (type_id) = 401; // CTRL_REQUEST_NETWORK_GET_INTERFACE
+  uint32 index = 1;
+}
+
+message GetInterfaceReply {
+  Interface interface = 1;
+}
+
+message GetInterfaceStoredConfigurationRequest {
+  option (type_id) = 402; // CTRL_REQUEST_NETWORK_GET_INTERFACE_STORED_CONFIGURATION
+  uint32 index = 1;
+}
+
+message GetInterfaceStoredConfigurationReply {
+  repeated Interface config = 1;
+}
+
+message SetInterfaceStoredConfigurationRequest {
+  option (type_id) = 403; // CTRL_REQUEST_NETWORK_SET_INTERFACE_STORED_CONFIGURATION
+  Interface config = 1;
+}
+
+message SetInterfaceStoredConfigurationReply {
+}
+
+
+message DeleteInterfaceStoredConfigurationRequest {
+  option (type_id) = 404; // CTRL_REQUEST_NETWORK_DELETE_INTERFACE_STORED_CONFIGURATION
+  uint32 index = 1;
+  bytes profile = 2; // Optional, if unset - remove all entries
+}
+
+
+message DeleteInterfaceStoredConfigurationReply {
+}
+ 

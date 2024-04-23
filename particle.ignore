@@ -1,0 +1,8 @@
+test/**/*.*
+lib/nanopb/nanopb/tests/**/*.*
+lib/nanopb/nanopb/examples/**/*.*
+lib/nanopb/nanopb/spm-test/**/*.*
+lib/nanopb/nanopb/spm_headers/**/*.*
+lib/nanopb/nanopb/extra/**/*.*
+
+

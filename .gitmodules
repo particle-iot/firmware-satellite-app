@@ -1,0 +1,6 @@
+[submodule "device-os-protobuf"]
+	path = lib/device-os-protobuf/device-os-protobuf
+	url = https://github.com/particle-iot/device-os-protobuf.git
+[submodule "nanopb"]
+	path = lib/nanopb/nanopb
+	url = https://github.com/particle-iot/nanopb.git
