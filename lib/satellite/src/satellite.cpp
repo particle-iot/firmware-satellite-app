@@ -85,6 +85,10 @@ bool celullarNotReady() {
     return !Cellular.ready();
 }
 
+bool wifiNotReady() {
+    return !WiFi.ready();
+}
+
 } // annonymous
 
 Satellite::Satellite() : begun_(false)
@@ -133,6 +137,21 @@ int Satellite::cbQCFGEXTread(int type, const char* buf, int len, char* rxdata)
     return WAIT;
 }
 
+int Satellite::cbQGPSLOC(int type, const char* buf, int len, GnssPositioningInfo* info)
+{
+    if ((type == TYPE_PLUS) && info) {
+        if (sscanf(buf, "\r\n+QGPSLOC: %02d%02d%02d.%*03d,%lf,%lf,%f,%f,%d,%f,%f,%f,%02d%02d%02d,%d\r\n",
+                        &info->utcTime.tm_hour, &info->utcTime.tm_min, &info->utcTime.tm_sec,
+                        &info->latitude, &info->longitude, &info->accuracy, &info->altitude,
+                        &info->posMode, &info->cog, &info->speedKmph, &info->speedKnots,
+                        &info->utcTime.tm_mday, &info->utcTime.tm_mon, &info->utcTime.tm_year,
+                        &info->satsInView) == 15) {
+            info->valid = 1;
+        }
+    }
+    return WAIT;
+}
+
 int Satellite::isRegistered() {
     bool reg = false;
     char network[32] = "";
@@ -145,6 +164,8 @@ int Satellite::isRegistered() {
 
     return reg;
 }
+
+
 
 int Satellite::waitAtResponse(unsigned int tries, unsigned int timeout) {
     unsigned int attempt = 0;
@@ -346,10 +367,91 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
     return 0;
 }
 
+int Satellite::publishLocation() {
+
+    GnssPositioningInfo info = {};
+    auto s = millis();
+    Cellular.command(2000, "AT+QGPS=1\r\n");
+    delay(5000);
+
+    do {
+        Cellular.command(cbQGPSLOC, &info, 2000, "AT+QGPSLOC=2\r\n");
+
+        if (info.valid) {
+            Log.info("GPS TIME: %02d/%02d/%02d %02d:%02d:%02d", info.utcTime.tm_year, info.utcTime.tm_mon,
+                    info.utcTime.tm_mday, info.utcTime.tm_hour, info.utcTime.tm_min, info.utcTime.tm_sec);
+            Log.info("LOCATION: %.5lf, %.5lf, ALT:%.1f SATS:%d\r\n", info.latitude, info.longitude,
+                    info.altitude, info.satsInView);
+        } else {
+            delay(5000);
+        }
+        // else {
+        //     Log.warn("LOCATION INFORMATION NOT VALID!");
+        // }
+    } while (!info.valid && millis() - s < 120000);
+
+    Cellular.command(2000, "AT+QGPSEND\r\n");
+
+    if (info.valid) {
+        memset(publishBuffer, 0, sizeof(publishBuffer));
+        SpecialJSONWriter writer(publishBuffer, sizeof(publishBuffer));
+        auto now = (unsigned int)Time.now();
+        writer.beginObject();
+            writer.name("cmd").value("loc");
+            writer.name("time").value(now);
+            writer.name("loc").beginObject();
+                writer.name("lck").value(1);
+                writer.name("time").value(now);
+                writer.name("lat").value(info.latitude);
+                writer.name("lon").value(info.longitude);
+                writer.name("alt").value(info.altitude);
+            writer.endObject();
+
+            // size_t remainingSize = writer.bufferSize() - 1 /* null */
+            //     - writer.dataSize() - ObjectEstimateEndCommandSize;
+
+            // // Populate cellular tower information for publish
+            // remainingSize -= buildTowerInfo(writer, remainingSize);
+            // remainingSize -= buildWpsInfo(writer, remainingSize);
+            // writer.name("req_id").value(req_id_++);
+        writer.endObject();
+
+        WiFi.on();
+        waitUntil(WiFi.isOn);
+        WiFi.connect();
+        if (waitFor(WiFi.ready, 30000)) {
+            Particle.connect();
+            waitUntil(Particle.connected);
+
+            Particle.publish("loc", publishBuffer);
+
+            Particle.disconnect();
+            waitUntil(Particle.disconnected);
+            WiFi.disconnect();
+            waitUntil(wifiNotReady);
+            WiFi.off();
+            waitUntil(WiFi.isOff);
+        }
+    }
+
+    return 0;
+}
+
 int Satellite::process() {
     updateRegistration();
     receiveData();
     proto_.run();
+
+    // static auto s = millis();
+    // if (millis() - s > 60000) {
+    //     s = millis();
+    //     gpsStartStop = !gpsStartStop;
+    //     if (gpsStartStop) {
+    //         Cellular.command(2000, "AT+QGPS=1\r\n");
+    //     } else {
+    //         Cellular.command(2000, "AT+QGPSEND\r\n");
+    //     }
+    // }
 
     return 0;
 }

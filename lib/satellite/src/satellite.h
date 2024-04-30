@@ -30,6 +30,32 @@ const auto NW_CONNECTED_FAILED = 2;
 
 namespace particle {
 
+struct GnssPositioningInfo {
+    uint16_t version;
+    uint16_t size;
+    double latitude;
+    double longitude;
+    float accuracy;
+    float altitude;
+    float cog;
+    float speedKmph;
+    float speedKnots;
+    struct tm utcTime;
+    int satsInView;
+    bool locked;
+    int posMode;
+    int valid;
+};
+
+class SpecialJSONWriter : public spark::JSONBufferWriter {
+
+  public:
+    SpecialJSONWriter(char *buf, size_t size) : spark::JSONBufferWriter(buf, size) {
+
+    }
+    using spark::JSONBufferWriter::write;
+};
+
 class Satellite {
 
 public:
@@ -55,6 +81,8 @@ public:
         return proto_.subscribe(code, std::move(onEvent));
     }
 
+    int publishLocation(void);
+
     int process();
 
 private:
@@ -68,10 +96,13 @@ private:
 
     constrained::CloudProtocol proto_;
 
+    char publishBuffer[1024] = {};
+
     static int cbICCID(int type, const char* buf, int len, char* iccid);
     static int cbCOPS(int type, const char* buf, int len, char* network);
     static int cbQCFGEXTquery(int type, const char* buf, int len, int* rxlen);
     static int cbQCFGEXTread(int type, const char* buf, int len, char* rxdata);
+    static int cbQGPSLOC(int type, const char* buf, int len, GnssPositioningInfo* info);
 
     int isRegistered(void);
     int waitAtResponse(unsigned int tries, unsigned int timeout = 1000);
