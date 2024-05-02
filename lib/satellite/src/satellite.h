@@ -93,6 +93,7 @@ private:
     uint8_t nwConnected = NW_CONNECTED_INIT;
     uint32_t lastReceivedCheck_ = 0;
     uint32_t lastRegistrationCheck_ = 0;
+    uint32_t registrationUpdateMs_ = 0;
 
     constrained::CloudProtocol proto_;
 

@@ -56,26 +56,26 @@ void setup()
 
 void loop()
 {
-    static uint32_t s = millis() - 20000;
-    static uint32_t l = millis() - 30000;
+    static uint32_t s = millis() - 30000;
+    // static uint32_t l = millis() - 30000;
     static uint32_t c = 0;
-    static String str = "1234567890";
+    static String str = "12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123_241_MAX";
 
-    if (satellite.connected() && millis() - s > 20000) {
-        Log.info("TXing: %lu", c);
+    if (satellite.connected() && millis() - s > 30000) {
+        Log.info("TXing: %lu [%d]", c, str.length());
 
         Variant v;
         v["foo"] = str.c_str();
-        satellite.publish(123 /* code */, v);
+        satellite.publish(1 /* code */, v);
 
         s = millis();
         c++;
     }
 
-    if (millis() - l > 60000) {
-        l = millis();
-        satellite.publishLocation();
-    }
+    // if (millis() - l > 60000) {
+    //     l = millis();
+    //     satellite.publishLocation();
+    // }
 
     satellite.process();
 }

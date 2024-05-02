@@ -27,7 +27,6 @@ LOG_SOURCE_CATEGORY("ncp.client");
 
 #include <str_util.h>
 
-// protobuf test code includes
 #include <memory>
 #include <cstdint>
 #include <pb_encode.h>
@@ -76,7 +75,8 @@ using namespace constrained;
 namespace {
 
 #define SATELLITE_NCP_RX_DATA_READ_TIMEOUT_MS (3000)
-#define SATELLITE_NCP_REGISTRATION_UPDATE_MS (60000)
+#define SATELLITE_NCP_REGISTRATION_UPDATE_SLOW_MS (60000)
+#define SATELLITE_NCP_REGISTRATION_UPDATE_FAST_MS (15000)
 #define SATELLITE_NCP_RECEIVE_UPDATE_MS (10000)
 
 #define SATELLITE_NCP_COPS_TIMEOUT_MS (180000)
@@ -91,8 +91,9 @@ bool wifiNotReady() {
 
 } // annonymous
 
-Satellite::Satellite() : begun_(false)
+Satellite::Satellite() : begun_(false), registrationUpdateMs_(SATELLITE_NCP_REGISTRATION_UPDATE_FAST_MS)
 {
+
 }
 
 Satellite::~Satellite() {
@@ -275,11 +276,7 @@ int Satellite::connect() {
             Log.info("NOT REGISTERED YET");
         }
         Cellular.command(2000, "AT+QENG=\"servingcell\"");
-        auto s = millis();
-        while (millis() - s < 5000) {
-            process();
-            Particle.process();
-        }
+        delay(5000);
     }
 
     Log.trace("Connecting to the Cloud");
@@ -307,13 +304,21 @@ bool Satellite::connected(void) {
 
 void Satellite::updateRegistration(void) {
     // periodically check for registration
-    if (millis() - lastRegistrationCheck_ >= SATELLITE_NCP_REGISTRATION_UPDATE_MS) {
+    if (millis() - lastRegistrationCheck_ >= registrationUpdateMs_) {
         // Log.info("registered_:%d, connected():%d", registered_, connected());
-        registered_ = isRegistered();
-        if (!registered_) {
+        bool r = isRegistered();
+        if (r && !registered_) {
+            // we just reattached, reconnect to NTN
+            nwConnected = NW_CONNECTED_INIT;
+            registered_ = r;
+            connect();
+        } else if (!r) {
+            // detached, reset NTN connection
             nwConnected = NW_CONNECTED_INIT;
         }
+        registered_ = r;
         lastRegistrationCheck_ = millis();
+        registrationUpdateMs_ = connected() ? SATELLITE_NCP_REGISTRATION_UPDATE_SLOW_MS : SATELLITE_NCP_REGISTRATION_UPDATE_FAST_MS;
     }
 }
 
@@ -362,6 +367,7 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
         Log.info("%d BYTES SENT!\r\n", len);
     } else {
         Log.error("ERROR SENDING DATA!");
+        lastRegistrationCheck_ = millis() - registrationUpdateMs_; // force an update next time through
     }
 
     return 0;
@@ -385,9 +391,6 @@ int Satellite::publishLocation() {
         } else {
             delay(5000);
         }
-        // else {
-        //     Log.warn("LOCATION INFORMATION NOT VALID!");
-        // }
     } while (!info.valid && millis() - s < 120000);
 
     Cellular.command(2000, "AT+QGPSEND\r\n");
@@ -406,14 +409,6 @@ int Satellite::publishLocation() {
                 writer.name("lon").value(info.longitude);
                 writer.name("alt").value(info.altitude);
             writer.endObject();
-
-            // size_t remainingSize = writer.bufferSize() - 1 /* null */
-            //     - writer.dataSize() - ObjectEstimateEndCommandSize;
-
-            // // Populate cellular tower information for publish
-            // remainingSize -= buildTowerInfo(writer, remainingSize);
-            // remainingSize -= buildWpsInfo(writer, remainingSize);
-            // writer.name("req_id").value(req_id_++);
         writer.endObject();
 
         WiFi.on();
@@ -441,17 +436,6 @@ int Satellite::process() {
     updateRegistration();
     receiveData();
     proto_.run();
-
-    // static auto s = millis();
-    // if (millis() - s > 60000) {
-    //     s = millis();
-    //     gpsStartStop = !gpsStartStop;
-    //     if (gpsStartStop) {
-    //         Cellular.command(2000, "AT+QGPS=1\r\n");
-    //     } else {
-    //         Cellular.command(2000, "AT+QGPSEND\r\n");
-    //     }
-    // }
 
     return 0;
 }
