@@ -79,6 +79,8 @@ namespace {
 #define SATELLITE_NCP_REGISTRATION_UPDATE_FAST_MS (15000)
 #define SATELLITE_NCP_RECEIVE_UPDATE_MS (10000)
 
+#define SATELLITE_NCP_COMM_ERRORS_MAX (3)
+
 #define SATELLITE_NCP_COPS_TIMEOUT_MS (180000)
 
 bool celullarNotReady() {
@@ -187,6 +189,7 @@ int Satellite::waitAtResponse(unsigned int tries, unsigned int timeout) {
 
 int Satellite::begin() { // (const SatelliteConfig& conf) {
     begun_ = true;
+    errorCount_ = 0;
     // conf_ = conf;
 
     if (!Cellular.isOn() || Cellular.isOff()) {
@@ -367,7 +370,7 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
         Log.info("%d BYTES SENT!\r\n", len);
     } else {
         Log.error("ERROR SENDING DATA!");
-        lastRegistrationCheck_ = millis() - registrationUpdateMs_; // force an update next time through
+        errorCount_++;
     }
 
     return 0;
@@ -432,9 +435,22 @@ int Satellite::publishLocation() {
     return 0;
 }
 
+int Satellite::processErrors() {
+    if (errorCount_ >= SATELLITE_NCP_COMM_ERRORS_MAX) {
+        // reset modem and re-init
+        Cellular.command(20000, "AT+CFUN=0\r\n");
+        Cellular.command(20000, "AT+CFUN=1\r\n");
+        errorCount_ = 0;
+        registrationUpdateMs_ = SATELLITE_NCP_REGISTRATION_UPDATE_FAST_MS;
+    }
+
+    return 0;
+}
+
 int Satellite::process() {
     updateRegistration();
     receiveData();
+    processErrors();
     proto_.run();
 
     return 0;

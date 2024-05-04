@@ -59,13 +59,16 @@ void loop()
     static uint32_t s = millis() - 30000;
     // static uint32_t l = millis() - 30000;
     static uint32_t c = 0;
-    static String str = "12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123_241_MAX";
+    // static String str = "12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123_241_MAX";
+    // static String str = "";
+    static int counter = 1;
 
     if (satellite.connected() && millis() - s > 30000) {
-        Log.info("TXing: %lu [%d]", c, str.length());
+        // Log.info("TXing: %lu [%d]", c, str.length());
+        Log.info("TXing: %lu [%d]", c, counter);
 
         Variant v;
-        v["foo"] = str.c_str();
+        v["foo"] = String(counter++).c_str();
         satellite.publish(1 /* code */, v);
 
         s = millis();

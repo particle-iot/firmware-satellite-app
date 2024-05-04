@@ -94,6 +94,7 @@ private:
     uint32_t lastReceivedCheck_ = 0;
     uint32_t lastRegistrationCheck_ = 0;
     uint32_t registrationUpdateMs_ = 0;
+    int errorCount_ = 0;
 
     constrained::CloudProtocol proto_;
 
@@ -110,6 +111,7 @@ private:
     int publishImpl(int code, const std::optional<Variant>& data = std::nullopt);
     void updateRegistration(void);
     void receiveData(void);
+    int processErrors(void);
 };
 
 } // particle
