@@ -282,12 +282,12 @@ int Satellite::connect() {
         delay(5000);
     }
 
-    Log.trace("Connecting to the Cloud");
     r = proto_.connect();
     if (r < 0) {
         Log.error("CloudProtocol::connect() failed: %d", r);
         return r;
     }
+    Log.trace("Connected to the Cloud");
 
     return 0;
 }

@@ -25,6 +25,9 @@ SerialLogHandler logHandler(LOG_LEVEL_ALL);
 
 Satellite satellite;
 
+uint32_t s = 0;
+int counter = 1;
+
 void setup()
 {
     waitUntil(Serial.isConnected);
@@ -47,6 +50,7 @@ void setup()
             RGB.color(0,255,255);
             Log.info("PUBLISH ------------------");
             digitalWrite(D7, HIGH);
+            s = millis() - 30000;
         }
     } else {
         Log.error("Error initializing Satellite radio");
@@ -56,29 +60,25 @@ void setup()
 
 void loop()
 {
-    static uint32_t s = millis() - 30000;
-    // static uint32_t l = millis() - 30000;
-    static uint32_t c = 0;
-    // static String str = "12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123_241_MAX";
-    // static String str = "";
-    static int counter = 1;
-
     if (satellite.connected() && millis() - s > 30000) {
-        // Log.info("TXing: %lu [%d]", c, str.length());
-        Log.info("TXing: %lu [%d]", c, counter);
-
-        Variant v;
-        v["foo"] = String(counter++).c_str();
-        satellite.publish(1 /* code */, v);
-
         s = millis();
-        c++;
-    }
+        Log.info("PUBLISH: satellite/1 {\"count\",%d} ------------------", counter);
 
-    // if (millis() - l > 60000) {
-    //     l = millis();
-    //     satellite.publishLocation();
-    // }
+        Variant data;
+        data.set("count", counter++);
+        satellite.publish(1 /* code */, data);
+    }
 
     satellite.process();
 }
+
+
+
+
+
+
+
+
+
+
+
