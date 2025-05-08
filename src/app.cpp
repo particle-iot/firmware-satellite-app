@@ -18,7 +18,6 @@
 #include "Particle.h"
 #include "satellite.h"
 
-SYSTEM_THREAD(ENABLED);
 SYSTEM_MODE(SEMI_AUTOMATIC);
 
 SerialLogHandler logHandler(LOG_LEVEL_ALL);
@@ -30,7 +29,7 @@ int counter = 1;
 
 void setup()
 {
-    waitUntil(Serial.isConnected);
+    //waitUntil(Serial.isConnected);
 
     pinMode(D7, OUTPUT);
     digitalWrite(D7, LOW);
@@ -60,13 +59,28 @@ void setup()
 
 void loop()
 {
-    if (satellite.connected() && millis() - s > 30000) {
+    if (satellite.connected() && millis() - s > 60000) {
         s = millis();
         Log.info("PUBLISH: satellite/1 {\"count\",%d} ------------------", counter);
-
         Variant data;
-        data.set("count", counter++);
-        satellite.publish(1 /* code */, data);
+        data.set("count", counter);
+        if (satellite.getGNSSLocation() == 0) {
+            data.set("lat", satellite.lastPositionInfo().latitude);
+            data.set("long", satellite.lastPositionInfo().longitude);
+            //data.set("alt", (int)satellite.lastPositionInfo().altitude);
+
+            // Make sure we re-connect to sklyo after getting gnss fix
+            satellite.updateRegistration(true);
+        }
+
+        if (satellite.connected()) {
+            satellite.publish(1 /* code */, data);
+            counter++;
+        }
+
+        // if (Particle.connected()) {
+        //     satellite.publishLocation();
+        // }
     }
 
     satellite.process();
