@@ -44,6 +44,16 @@ void setup()
     RGB.control(true);
     RGB.color(0,255,0);
 
+    // WiFi.setCredentials("MySSID", "MyPassword");
+    if (WiFi.hasCredentials()) {
+        WiFi.on();
+        waitUntil(WiFi.isOn);
+        WiFi.connect();
+        if (waitFor(WiFi.ready, 30000)) {
+            Particle.connect();
+        }
+    }   
+
     Log.info("BEGIN --------------------");
     if (satellite.begin() == SYSTEM_ERROR_NONE) {
         satellite.process();
@@ -62,15 +72,7 @@ void setup()
     } else {
         Log.error("Error initializing Satellite radio");
         RGB.color(255,0,0);
-    }
-
-    // WiFi.setCredentials("MySSID", "MyPassword");
-    WiFi.on();
-    waitUntil(WiFi.isOn);
-    WiFi.connect();
-    if (waitFor(WiFi.ready, 30000)) {
-        Particle.connect();
-    }
+    } 
 }
 
 // Manually construct a 'loc' object to publish position to Particle Cloud
@@ -112,12 +114,12 @@ void loop()
                 satellite.updateRegistration(true);
 
                 state = AppState::PublishGNSSLocation;
-                return;
+                break;
             }
 
             case AppState::PublishGNSSLocation:
             {
-                Log.info("PUBLISH: satellite/1 {\"count\",%d} ------------------", publishCount++);
+                Log.info("PUBLISH: satellite/1 {\"count\",%d} ------------------", publishCount);
 
                 Variant data;
                 data.set("count", publishCount);
@@ -136,12 +138,13 @@ void loop()
                     Log.info("Cloud publish result: %d", cloudPublishResult);
                 }
 
+                publishCount++;
                 state = AppState::GetGNSSLocation;
-                return;
+                break;
             }
 
             default:
-                return;
+                break;
         }
     }
 
