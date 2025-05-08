@@ -24,8 +24,16 @@ SerialLogHandler logHandler(LOG_LEVEL_ALL);
 
 Satellite satellite;
 
+typedef enum AppState {
+    GetGNSSLocation,
+    PublishGNSSLocation
+} AppState;
+
 uint32_t s = 0;
-int counter = 1;
+int publishCount = 1;
+int satPublishSuccess = 0;
+int satPublishFailures = 0;
+AppState state = AppState::GetGNSSLocation;
 
 void setup()
 {
@@ -47,7 +55,7 @@ void setup()
 
         if (satellite.connected()) {
             RGB.color(0,255,255);
-            Log.info("PUBLISH ------------------");
+            Log.info("SATELLITE CONNECTED ------------------");
             digitalWrite(D7, HIGH);
             s = millis() - 30000;
         }
@@ -55,32 +63,86 @@ void setup()
         Log.error("Error initializing Satellite radio");
         RGB.color(255,0,0);
     }
+
+    // WiFi.setCredentials("MySSID", "MyPassword");
+    WiFi.on();
+    waitUntil(WiFi.isOn);
+    WiFi.connect();
+    if (waitFor(WiFi.ready, 30000)) {
+        Particle.connect();
+    }
+}
+
+// Manually construct a 'loc' object to publish position to Particle Cloud
+int publishLocation(GnssPositioningInfo position) {
+    char publishBuffer[1024] = {};
+
+    if (!position.valid) {
+        return -1;
+    }
+
+    memset(publishBuffer, 0, sizeof(publishBuffer));
+    SpecialJSONWriter writer(publishBuffer, sizeof(publishBuffer));
+    auto now = (unsigned int)Time.now();
+    writer.beginObject();
+        writer.name("cmd").value("loc");
+        writer.name("time").value(now);
+        writer.name("loc").beginObject();
+            writer.name("lck").value(1);
+            writer.name("time").value(now);
+            writer.name("lat").value(position.latitude);
+            writer.name("lon").value(position.longitude);
+            writer.name("alt").value(position.altitude);
+        writer.endObject();
+    writer.endObject();
+
+    return Particle.publish("loc", publishBuffer);
 }
 
 void loop()
 {
-    if (satellite.connected() && millis() - s > 60000) {
+    if (satellite.connected() && millis() - s > 30000) {
         s = millis();
-        Log.info("PUBLISH: satellite/1 {\"count\",%d} ------------------", counter);
-        Variant data;
-        data.set("count", counter);
-        if (satellite.getGNSSLocation() == 0) {
-            data.set("lat", satellite.lastPositionInfo().latitude);
-            data.set("long", satellite.lastPositionInfo().longitude);
-            //data.set("alt", (int)satellite.lastPositionInfo().altitude);
 
-            // Make sure we re-connect to sklyo after getting gnss fix
-            satellite.updateRegistration(true);
+        switch(state) {
+            case AppState::GetGNSSLocation:
+            {
+                satellite.getGNSSLocation();
+                // Make sure we re-connect to sklyo NTN after getting gnss fix
+                satellite.updateRegistration(true);
+
+                state = AppState::PublishGNSSLocation;
+                return;
+            }
+
+            case AppState::PublishGNSSLocation:
+            {
+                Log.info("PUBLISH: satellite/1 {\"count\",%d} ------------------", publishCount++);
+
+                Variant data;
+                data.set("count", publishCount);
+                data.set("lat", satellite.lastPositionInfo().latitude);
+                data.set("long", satellite.lastPositionInfo().longitude);
+                //data.set("alt", (int)satellite.lastPositionInfo().altitude);
+        
+                if (satellite.connected()) {
+                    auto satPublishResult = satellite.publish(1 /* code */, data);
+                    satPublishResult < 0 ? satPublishFailures++ : satPublishSuccess++;
+                    Log.info("Satellite publish successes/total %d/%d ", satPublishSuccess, publishCount);
+                }
+        
+                if (Particle.connected()) {
+                    auto cloudPublishResult = publishLocation(satellite.lastPositionInfo());
+                    Log.info("Cloud publish result: %d", cloudPublishResult);
+                }
+
+                state = AppState::GetGNSSLocation;
+                return;
+            }
+
+            default:
+                return;
         }
-
-        if (satellite.connected()) {
-            satellite.publish(1 /* code */, data);
-            counter++;
-        }
-
-        // if (Particle.connected()) {
-        //     satellite.publishLocation();
-        // }
     }
 
     satellite.process();

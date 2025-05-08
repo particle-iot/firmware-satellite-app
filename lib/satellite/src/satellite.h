@@ -82,7 +82,7 @@ public:
         return proto_.subscribe(code, std::move(onEvent));
     }
 
-    int getGNSSLocation(int maxFixWaitTimeMs = 30000);
+    int getGNSSLocation(unsigned int maxFixWaitTimeMs = 30000);
     int publishLocation();
 
     int process();

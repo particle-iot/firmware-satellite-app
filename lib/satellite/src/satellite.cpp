@@ -371,12 +371,13 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
     } else {
         Log.error("ERROR SENDING DATA!");
         errorCount_++;
+        return -1;
     }
 
     return 0;
 }
 
-int Satellite::getGNSSLocation(int maxFixWaitTimeMs) {
+int Satellite::getGNSSLocation(unsigned int maxFixWaitTimeMs) {
     GnssPositioningInfo info = {};
     auto s = millis();
     Cellular.command(2000, "AT+QGPS=1\r\n");
@@ -423,24 +424,22 @@ int Satellite::publishLocation() {
         writer.endObject();
     writer.endObject();
 
-    Particle.publish("loc", publishBuffer);
+    WiFi.on();
+    waitUntil(WiFi.isOn);
+    WiFi.connect();
+    if (waitFor(WiFi.ready, 30000)) {
+        Particle.connect();
+        waitUntil(Particle.connected);
 
-    // WiFi.on();
-    // waitUntil(WiFi.isOn);
-    // WiFi.connect();
-    // if (waitFor(WiFi.ready, 30000)) {
-    //     Particle.connect();
-    //     waitUntil(Particle.connected);
+        Particle.publish("loc", publishBuffer);
 
-    //     Particle.publish("loc", publishBuffer);
-
-    //     Particle.disconnect();
-    //     waitUntil(Particle.disconnected);
-    //     WiFi.disconnect();
-    //     waitUntil(wifiNotReady);
-    //     WiFi.off();
-    //     waitUntil(WiFi.isOff);
-    // }
+        Particle.disconnect();
+        waitUntil(Particle.disconnected);
+        WiFi.disconnect();
+        waitUntil(wifiNotReady);
+        WiFi.off();
+        waitUntil(WiFi.isOff);
+    }
 
     return 0;
 }
@@ -453,7 +452,10 @@ int Satellite::processErrors() {
         errorCount_ = 0;
         registrationUpdateMs_ = SATELLITE_NCP_REGISTRATION_UPDATE_FAST_MS;
     }
-
+    // TODO: Check for uncommanded band change
+    // 0000001817 [ncp.at] TRACE: > AT+QCFG="band"
+    // 0000001831 [ncp.at] TRACE: < +QCFG: "band",0xf,0x100002000000000f0e189f,0x10004200000000090e189f,0x7
+    // 0000001859 [ncp.at] TRACE: < OK
     return 0;
 }
 
