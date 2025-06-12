@@ -305,9 +305,9 @@ bool Satellite::connected(void) {
     return nwConnected == NW_CONNECTED_SUCCESS;
 }
 
-void Satellite::updateRegistration(void) {
+void Satellite::updateRegistration(bool force) {
     // periodically check for registration
-    if (millis() - lastRegistrationCheck_ >= registrationUpdateMs_) {
+    if (force || millis() - lastRegistrationCheck_ >= registrationUpdateMs_) {
         // Log.info("registered_:%d, connected():%d", registered_, connected());
         bool r = isRegistered();
         if (r && !registered_) {
@@ -371,13 +371,13 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
     } else {
         Log.error("ERROR SENDING DATA!");
         errorCount_++;
+        return -1;
     }
 
     return 0;
 }
 
-int Satellite::publishLocation() {
-
+int Satellite::getGNSSLocation(unsigned int maxFixWaitTimeMs) {
     GnssPositioningInfo info = {};
     auto s = millis();
     Cellular.command(2000, "AT+QGPS=1\r\n");
@@ -394,42 +394,51 @@ int Satellite::publishLocation() {
         } else {
             delay(5000);
         }
-    } while (!info.valid && millis() - s < 120000);
+    } while (!info.valid && millis() - s < maxFixWaitTimeMs);
 
     Cellular.command(2000, "AT+QGPSEND\r\n");
 
     if (info.valid) {
-        memset(publishBuffer, 0, sizeof(publishBuffer));
-        SpecialJSONWriter writer(publishBuffer, sizeof(publishBuffer));
-        auto now = (unsigned int)Time.now();
-        writer.beginObject();
-            writer.name("cmd").value("loc");
+        lastPositionInfo_ = info;
+    }
+    return info.valid == 1 ? 0 : -1;
+}
+
+int Satellite::publishLocation() {
+    if (!lastPositionInfo_.valid) {
+        return -1;
+    }
+
+    memset(publishBuffer, 0, sizeof(publishBuffer));
+    SpecialJSONWriter writer(publishBuffer, sizeof(publishBuffer));
+    auto now = (unsigned int)Time.now();
+    writer.beginObject();
+        writer.name("cmd").value("loc");
+        writer.name("time").value(now);
+        writer.name("loc").beginObject();
+            writer.name("lck").value(1);
             writer.name("time").value(now);
-            writer.name("loc").beginObject();
-                writer.name("lck").value(1);
-                writer.name("time").value(now);
-                writer.name("lat").value(info.latitude);
-                writer.name("lon").value(info.longitude);
-                writer.name("alt").value(info.altitude);
-            writer.endObject();
+            writer.name("lat").value(lastPositionInfo_.latitude);
+            writer.name("lon").value(lastPositionInfo_.longitude);
+            writer.name("alt").value(lastPositionInfo_.altitude);
         writer.endObject();
+    writer.endObject();
 
-        WiFi.on();
-        waitUntil(WiFi.isOn);
-        WiFi.connect();
-        if (waitFor(WiFi.ready, 30000)) {
-            Particle.connect();
-            waitUntil(Particle.connected);
+    WiFi.on();
+    waitUntil(WiFi.isOn);
+    WiFi.connect();
+    if (waitFor(WiFi.ready, 30000)) {
+        Particle.connect();
+        waitUntil(Particle.connected);
 
-            Particle.publish("loc", publishBuffer);
+        Particle.publish("loc", publishBuffer);
 
-            Particle.disconnect();
-            waitUntil(Particle.disconnected);
-            WiFi.disconnect();
-            waitUntil(wifiNotReady);
-            WiFi.off();
-            waitUntil(WiFi.isOff);
-        }
+        Particle.disconnect();
+        waitUntil(Particle.disconnected);
+        WiFi.disconnect();
+        waitUntil(wifiNotReady);
+        WiFi.off();
+        waitUntil(WiFi.isOff);
     }
 
     return 0;
@@ -443,12 +452,15 @@ int Satellite::processErrors() {
         errorCount_ = 0;
         registrationUpdateMs_ = SATELLITE_NCP_REGISTRATION_UPDATE_FAST_MS;
     }
-
+    // TODO: Check for uncommanded band change
+    // 0000001817 [ncp.at] TRACE: > AT+QCFG="band"
+    // 0000001831 [ncp.at] TRACE: < +QCFG: "band",0xf,0x100002000000000f0e189f,0x10004200000000090e189f,0x7
+    // 0000001859 [ncp.at] TRACE: < OK
     return 0;
 }
 
-int Satellite::process() {
-    updateRegistration();
+int Satellite::process(bool force) {
+    updateRegistration(force);
     receiveData();
     processErrors();
     proto_.run();

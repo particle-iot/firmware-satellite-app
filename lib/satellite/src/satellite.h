@@ -81,9 +81,14 @@ public:
         return proto_.subscribe(code, std::move(onEvent));
     }
 
-    int publishLocation(void);
+    int getGNSSLocation(unsigned int maxFixWaitTimeMs = 120000);
+    int publishLocation();
 
-    int process();
+    int process(bool force = false);
+
+    GnssPositioningInfo lastPositionInfo(void) {
+        return lastPositionInfo_;
+    };
 
 private:
 
@@ -95,7 +100,7 @@ private:
     uint32_t lastRegistrationCheck_ = 0;
     uint32_t registrationUpdateMs_ = 0;
     int errorCount_ = 0;
-
+    GnssPositioningInfo lastPositionInfo_;
     constrained::CloudProtocol proto_;
 
     char publishBuffer[1024] = {};
@@ -109,7 +114,8 @@ private:
     int isRegistered(void);
     int waitAtResponse(unsigned int tries, unsigned int timeout = 1000);
     int publishImpl(int code, const std::optional<Variant>& data = std::nullopt);
-    void updateRegistration(void);
+    void updateRegistration(bool force = false);
+
     void receiveData(void);
     int processErrors(void);
 };
