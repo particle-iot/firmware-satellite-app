@@ -459,8 +459,8 @@ int Satellite::processErrors() {
     return 0;
 }
 
-int Satellite::process() {
-    updateRegistration();
+int Satellite::process(bool force) {
+    updateRegistration(force);
     receiveData();
     processErrors();
     proto_.run();

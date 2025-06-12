@@ -52,7 +52,7 @@ void setup()
         if (waitFor(WiFi.ready, 30000)) {
             Particle.connect();
         }
-    }   
+    }
 
     Log.info("BEGIN --------------------");
     if (satellite.begin() == SYSTEM_ERROR_NONE) {
@@ -72,7 +72,7 @@ void setup()
     } else {
         Log.error("Error initializing Satellite radio");
         RGB.color(255,0,0);
-    } 
+    }
 }
 
 // Manually construct a 'loc' object to publish position to Particle Cloud
@@ -110,8 +110,8 @@ void loop()
             case AppState::GetGNSSLocation:
             {
                 satellite.getGNSSLocation();
-                // Make sure we re-connect to sklyo NTN after getting gnss fix
-                satellite.updateRegistration(true);
+                // Make sure we re-connect to Skylo NTN after getting gnss fix
+                satellite.process(true /* force updateRegistration */);
 
                 state = AppState::PublishGNSSLocation;
                 break;
@@ -126,13 +126,13 @@ void loop()
                 data.set("lat", satellite.lastPositionInfo().latitude);
                 data.set("long", satellite.lastPositionInfo().longitude);
                 //data.set("alt", (int)satellite.lastPositionInfo().altitude);
-        
+
                 if (satellite.connected()) {
                     auto satPublishResult = satellite.publish(1 /* code */, data);
                     satPublishResult < 0 ? satPublishFailures++ : satPublishSuccess++;
                     Log.info("Satellite publish successes/total %d/%d ", satPublishSuccess, publishCount);
                 }
-        
+
                 if (Particle.connected()) {
                     auto cloudPublishResult = publishLocation(satellite.lastPositionInfo());
                     Log.info("Cloud publish result: %d", cloudPublishResult);

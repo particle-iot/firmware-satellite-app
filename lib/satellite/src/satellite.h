@@ -67,7 +67,6 @@ public:
     int connect(void);
     int disconnect(void);
     bool connected(void);
-    void updateRegistration(bool force = false);
     int tx(const uint8_t* buf, size_t len, int port);
 
     int publish(int code) {
@@ -82,10 +81,10 @@ public:
         return proto_.subscribe(code, std::move(onEvent));
     }
 
-    int getGNSSLocation(unsigned int maxFixWaitTimeMs = 30000);
+    int getGNSSLocation(unsigned int maxFixWaitTimeMs = 120000);
     int publishLocation();
 
-    int process();
+    int process(bool force = false);
 
     GnssPositioningInfo lastPositionInfo(void) {
         return lastPositionInfo_;
@@ -115,7 +114,8 @@ private:
     int isRegistered(void);
     int waitAtResponse(unsigned int tries, unsigned int timeout = 1000);
     int publishImpl(int code, const std::optional<Variant>& data = std::nullopt);
-    
+    void updateRegistration(bool force = false);
+
     void receiveData(void);
     int processErrors(void);
 };
