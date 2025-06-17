@@ -140,32 +140,6 @@ void updateConnectionTimers(bool force=false) {
     }
 }
 
-// Manually construct a 'loc' object to publish position to Particle Cloud
-int publishLocation(GnssPositioningInfo position) {
-    char publishBuffer[1024] = {};
-
-    if (!position.valid) {
-        return -1;
-    }
-
-    memset(publishBuffer, 0, sizeof(publishBuffer));
-    SpecialJSONWriter writer(publishBuffer, sizeof(publishBuffer));
-    auto now = (unsigned int)Time.now();
-    writer.beginObject();
-        writer.name("cmd").value("loc");
-        writer.name("time").value(now);
-        writer.name("loc").beginObject();
-            writer.name("lck").value(1);
-            writer.name("time").value(now);
-            writer.name("lat").value(position.latitude);
-            writer.name("lon").value(position.longitude);
-            writer.name("alt").value(position.altitude);
-        writer.endObject();
-    writer.endObject();
-
-    return Particle.publish("loc", publishBuffer);
-}
-
 void setup()
 {
     // waitUntil(Serial.isConnected);
@@ -300,16 +274,30 @@ void loop()
 
             case AppPublishState::PublishGNSSLocation:
             {
-                Variant data;
-                data.set("count", publishCount);
-                data.set("lat", satellite.lastPositionInfo().latitude);
-                data.set("long", satellite.lastPositionInfo().longitude);
-                //data.set("alt", (int)satellite.lastPositionInfo().altitude);
+                auto now = (unsigned int)Time.now();
+
+                particle::Variant locEvent;
+                locEvent.set("cmd", "loc");
+                locEvent.set("time", now);
+                particle::Variant locationObject;
+                    locationObject.set("lck", 1);
+                    locationObject.set("time", now);
+                    locationObject.set("lat", satellite.lastPositionInfo().latitude);
+                    locationObject.set("lon", satellite.lastPositionInfo().longitude);
+                    locationObject.set("alt", satellite.lastPositionInfo().altitude);
+                locEvent.set("loc", locationObject);
+
+                CloudEvent event;
+                event.name("loc");
+                event.data(locEvent);
+
+                Log.info("publishing location %s", locEvent.toJSON().c_str());
 
                 if (satellite.connected())
                 {
-                    Log.info("SATELLITE PUBLISH: {\"count\",%d} ------------------", publishCount);
-                    auto satPublishResult = satellite.publish(1 /* code */, data);
+                    Log.info("SATELLITE PUBLISH: {\"count\",%d} ------------------", publishCount);    
+                    auto satPublishResult = satellite.publish(1 /* code */, locEvent);
+                    
                     satPublishResult < 0 ? satPublishFailures++ : satPublishSuccess++;
                     Log.info("Satellite publish successes/total %d/%d ", satPublishSuccess, satPublishSuccess + satPublishFailures);
                     lastPublish = millis();
@@ -319,7 +307,7 @@ void loop()
                     Log.info("CELLULAR PUBLISH: {\"count\",%d} ------------------", publishCount);
                     Particle.publish("cellular", String::format("{\"count\",%d}", publishCount));
 
-                    auto cloudPublishResult = publishLocation(satellite.lastPositionInfo());
+                    auto cloudPublishResult = Particle.publish("loc", locEvent);
                     Log.info("Cellular publish result: %d", cloudPublishResult);
                     lastPublish = millis();
                 } else {
