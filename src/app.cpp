@@ -28,18 +28,18 @@ ModemManager modem;
 
 // NOTE: Set both of the following options to 0 for normal operation, or 1 to TEST forced switching between radios
 //       based on the timeouts that follow.  e.g. if FORCE_CELLULAR_TO_SATELLITE_SWITCH is set to 1 and
-//       FORCE_RADIO_CELLULAR_TO_SATELLITE_SWITCH_TIMEOUT is set to 120000, the application will switch from Cellular
-//       to Satellite after 2 minutes.
-#define FORCE_CELLULAR_TO_SATELLITE_SWITCH (1)
-#define FORCE_SATELLITE_TO_CELLULAR_SWITCH (1)
-#define FORCE_RADIO_CELLULAR_TO_SATELLITE_SWITCH_TIMEOUT (2 * 60 * 1000)
-#define FORCE_RADIO_SATELLITE_TO_CELLULAR_SWITCH_TIMEOUT (2 * 60 * 1000)
+//       FORCE_RADIO_CELLULAR_TO_SATELLITE_SWITCH_TIMEOUT is set to 600000, the application will switch from Cellular
+//       to Satellite after 10 minutes.
+#define FORCE_CELLULAR_TO_SATELLITE_SWITCH (0)
+#define FORCE_SATELLITE_TO_CELLULAR_SWITCH (0)
+#define FORCE_RADIO_CELLULAR_TO_SATELLITE_SWITCH_TIMEOUT (10 * 60 * 1000)
+#define FORCE_RADIO_SATELLITE_TO_CELLULAR_SWITCH_TIMEOUT (10 * 60 * 1000)
 
 // These are pretty standard timeouts.  It is NOT recommended to set them below 10 minutes.
 // There is no CELLULAR_CONNECTED_TIMEOUT because if it's connected there's no reason to switch to satellite.
 #define CELLULAR_DISCONNECTED_TIMEOUT (10 * 60 * 1000)
 #define SATELLITE_CONNECTED_TIMEOUT (10 * 60 * 1000)
-#define SATELLITE_DISCONNECTED_TIMEOUT (20 * 60 * 1000)
+#define SATELLITE_DISCONNECTED_TIMEOUT (60 * 60 * 1000)
 
 // NOT recommended to set the publish interval below 10 seconds when on satellite
 #define PUBLISH_INTERVAL (30000)
@@ -56,8 +56,10 @@ typedef enum AppPublishState {
 } AppPublishState;
 
 uint32_t lastPublish = 0;
-uint32_t connectedTime = 0;
-uint32_t disconnectedTime = 0;
+uint32_t connectedStartTime = 0;
+uint32_t disconnectedStartTime = 0;
+uint32_t connectedDurationAccum = 0;
+uint32_t disconnectedDurationAccum = 0;
 uint32_t radioTime = 0;
 
 int publishCount = 1;
@@ -66,37 +68,75 @@ int satPublishFailures = 0;
 AppPublishState publishState = AppPublishState::WaitForConnnect;
 
 
-void updateConnectionTimers() {
-    bool connected = false;
+void updateConnectionTimers(bool force=false) {
+    int connected = 0;
+    static int lastConnected = -1;
     static radio_type_t lastRadio = RADIO_UNKNOWN;
+    radio_type_t radio = modem.radioEnabled();
 
-    if (modem.radioEnabled() == RADIO_CELLULAR) {
+    if (radio == RADIO_CELLULAR) {
         if (Particle.connected()) {
-            connected = true;
+            connected = 1;
         }
-    } else if (modem.radioEnabled() == RADIO_SATELLITE) {
+    } else if (radio == RADIO_SATELLITE) {
         if (satellite.connected()) {
-            connected = true;
+            connected = 1;
         }
     }
 
-    if (lastRadio != modem.radioEnabled()) {
-        connectedTime = 0;
-        disconnectedTime = 0;
-        radioTime = millis(); // reset radio time
-        lastRadio = modem.radioEnabled();
+    // reset timers on radio change only
+    if (lastRadio != radio) {
+        connectedStartTime = 0;
+        disconnectedStartTime = 0;
+        connectedDurationAccum = 0;
+        disconnectedDurationAccum = 0;
+        lastConnected = -1;
+        radioTime = millis();
+        lastRadio = radio;
     }
 
+    // make sure these are equal on first run
+    if (lastConnected == -1) {
+        lastConnected = connected;
+    }
+
+    // accumulate connected/disconnected time only
     if (connected) {
-        if (!connectedTime) {
-            connectedTime = millis();
+        if (lastConnected != connected) {
+            // save disconnectedDurationAccum if we just switched from disconnected to connected
+            if (disconnectedStartTime) {
+                disconnectedDurationAccum = millis() - disconnectedStartTime;
+            }
+            // add any connected time accumulated
+            if (connectedDurationAccum) {
+                connectedStartTime = millis() - connectedDurationAccum;
+            }
+            lastConnected = connected;
         }
-        disconnectedTime = 0;
+        if (!connectedStartTime) {
+            connectedStartTime = millis();
+        }
     } else {
-        if (!disconnectedTime) {
-            disconnectedTime = millis();
+        if (lastConnected != connected) {
+            if (connectedStartTime) {
+                // save connectedDurationAccum if we just switched from connected to disconnected
+                connectedDurationAccum = millis() - connectedStartTime;
+            }
+            if (disconnectedDurationAccum) {
+                // add any disconnected time accumulated
+                disconnectedStartTime = millis() - disconnectedDurationAccum;
+            }
+            lastConnected = connected;
         }
-        connectedTime = 0;
+        if (!disconnectedStartTime) {
+            disconnectedStartTime = millis();
+        }
+    }
+
+    static uint32_t lastCheck = millis();
+    if (force || millis() - lastCheck > 5000) {
+        lastCheck = millis();
+        Log.info("[%s] Con: %lu, Dis: %lu ConAccum: %lu, DisAccum: %lu", satellite.connected() ? "CONNECTED" : "DISCONNECTED", millis() - connectedStartTime, millis() - disconnectedStartTime, connectedDurationAccum, disconnectedDurationAccum);
     }
 }
 
@@ -142,6 +182,7 @@ void setup()
 #if START_ON_CELLULAR
     // Start on Cellular
     modem.radioEnable(RADIO_CELLULAR);
+    updateConnectionTimers(true /* forced log */);
 
     Particle.connect();
     waitFor(Particle.connected, 120000);
@@ -149,6 +190,7 @@ void setup()
 #else
     // Start on Satellite
     modem.radioEnable(RADIO_SATELLITE);
+    updateConnectionTimers(true /* forced log */);
     RGB.control(true);
     RGB.color(0,255,0);
 
@@ -173,7 +215,7 @@ void loop()
 #if FORCE_CELLULAR_TO_SATELLITE_SWITCH
             (radioTime && (millis() - radioTime > FORCE_RADIO_CELLULAR_TO_SATELLITE_SWITCH_TIMEOUT))
 #else
-            (disconnectedTime && (millis() - disconnectedTime > CELLULAR_DISCONNECTED_TIMEOUT))
+            (disconnectedStartTime && (millis() - disconnectedStartTime > CELLULAR_DISCONNECTED_TIMEOUT))
 #endif // FORCE_RADIO_CELLULAR_TO_SATELLITE_SWITCH_TIMEOUT
             )
     {
@@ -185,6 +227,7 @@ void loop()
 
         Log.info("RADIO SATELLITE --------------------");
         if (modem.radioEnable(RADIO_SATELLITE) == SYSTEM_ERROR_NONE) {
+            updateConnectionTimers(true /* forced log */);
             RGB.control(true);
             RGB.color(0,255,0);
 
@@ -210,7 +253,7 @@ void loop()
 #if FORCE_SATELLITE_TO_CELLULAR_SWITCH
             (radioTime && (millis() - radioTime > FORCE_RADIO_SATELLITE_TO_CELLULAR_SWITCH_TIMEOUT))
 #else
-            ( (disconnectedTime && (millis() - disconnectedTime > SATELLITE_DISCONNECTED_TIMEOUT)) || (connectedTime && (millis() - connectedTime > SATELLITE_CONNECTED_TIMEOUT)) )
+            ( (disconnectedStartTime && (millis() - disconnectedStartTime > SATELLITE_DISCONNECTED_TIMEOUT)) || (connectedStartTime && (millis() - connectedStartTime > SATELLITE_CONNECTED_TIMEOUT)) )
 #endif // FORCE_RADIO_SATELLITE_TO_CELLULAR_SWITCH_TIMEOUT
             )
     {
@@ -222,6 +265,7 @@ void loop()
 
         Log.info("RADIO CELLULAR --------------------");
         if (modem.radioEnable(RADIO_CELLULAR) == SYSTEM_ERROR_NONE) {
+            updateConnectionTimers(true /* forced log */);
 
             Log.info("CELLULAR CONNECT ---------------------");
             Particle.connect();
