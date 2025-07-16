@@ -85,6 +85,8 @@ namespace {
 
 const int PROFILES_SIZE_MAX = 4096;
 char profiles[PROFILES_SIZE_MAX] = {0};
+const int CSIM_RESPONSE_SIZE_MAX = 4096;
+char csimResponse[CSIM_RESPONSE_SIZE_MAX] = {0};
 
 } // namespace annonymous
 
@@ -325,7 +327,7 @@ int ModemManager::enableDisableProfile(int type, char* specifiedIccid, int radio
     char iccidList[ICCID_RESULTS_MAX][ICCID_LEN + 1];
     if (profileSize > 0) {
         char requestData[32] = {0};
-        char csimResponse[4096] = {0};
+        memset(&csimResponse, 0, sizeof(csimResponse));
         sprintf(requestData, "AT+CSIM=10,\"81C00000%02X\"", profileSize);
         Cellular.command(cbCSIMstring, csimResponse, requestData); // returns +CSIM: 160,"BF2D4BA049E32D5A0A980010325476981032149F700100921B47534D412054532E343820584F5220546573742050726F66696C65E3185A0A988803070000156406669F70010192065477696C696F9000"
 
@@ -421,7 +423,7 @@ int ModemManager::esimProfiles(char* specifiedIccid, char* profilesBuffer, int p
     char iccidList[ICCID_RESULTS_MAX][ICCID_LEN + 1];
     if (profileSize > 0) {
         char requestData[32] = {0};
-        char csimResponse[4096] = {0};
+        memset(&csimResponse, 0, sizeof(csimResponse));
         sprintf(requestData, "AT+CSIM=10,\"81C00000%02X\"", profileSize);
         Cellular.command(cbCSIMstring, csimResponse, requestData); // returns +CSIM: 160,"BF2D4BA049E32D5A0A980010325476981032149F700100921B47534D412054532E343820584F5220546573742050726F66696C65E3185A0A988803070000156406669F70010192065477696C696F9000"
         LOG_PRINTF_C(TRACE, "app", "%010lu [%s] D[%d]: ", millis(), "app", strlen(csimResponse));
