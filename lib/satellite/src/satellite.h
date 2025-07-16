@@ -24,9 +24,13 @@
 
 #include <optional>
 
-const auto NW_CONNECTED_INIT = 0;
-const auto NW_CONNECTED_SUCCESS = 1;
-const auto NW_CONNECTED_FAILED = 2;
+const uint8_t NW_CONNECTED_INIT = 0;
+const uint8_t NW_CONNECTED_SUCCESS = 1;
+const uint8_t NW_CONNECTED_FAILED = 2;
+
+const uint8_t NW_STATE_IDLE = 0;
+const uint8_t NW_STATE_CONNECT = 1;
+const uint8_t NW_STATE_DISCONNECT = 2;
 
 namespace particle {
 
@@ -94,17 +98,21 @@ private:
 
     bool begun_; // true if begin() previously called
 
-    bool registered_ = false;
-    uint8_t nwConnected = NW_CONNECTED_INIT;
+    uint8_t registered_ = 0;
+    volatile uint8_t ntnConnected = 0;
+    volatile uint8_t nwConnected = NW_CONNECTED_INIT;
+    volatile uint8_t nwConnectionDesired = NW_STATE_IDLE;
     uint32_t lastReceivedCheck_ = 0;
     uint32_t lastRegistrationCheck_ = 0;
     uint32_t registrationUpdateMs_ = 0;
+    uint32_t noRegistrationTimer_ = 0;
     int errorCount_ = 0;
     GnssPositioningInfo lastPositionInfo_;
     constrained::CloudProtocol proto_;
 
     char publishBuffer[1024] = {};
 
+    static int cbCFUN(int type, const char* buf, int len, int* cfun);
     static int cbICCID(int type, const char* buf, int len, char* iccid);
     static int cbCOPS(int type, const char* buf, int len, char* network);
     static int cbQCFGEXTquery(int type, const char* buf, int len, int* rxlen);
@@ -118,6 +126,8 @@ private:
 
     void receiveData(void);
     int processErrors(void);
+    int connectImpl(void);
+    int getICCID(char* i, bool log);
 };
 
 } // particle
