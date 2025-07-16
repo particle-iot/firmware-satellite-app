@@ -37,9 +37,10 @@ ModemManager modem;
 
 // These are pretty standard timeouts.  It is NOT recommended to set them below 10 minutes.
 // There is no CELLULAR_CONNECTED_TIMEOUT because if it's connected there's no reason to switch to satellite.
+// Satellite can take a long time to initially connect so it's not recommended to set the DISCONN. timeout too low.
 #define CELLULAR_DISCONNECTED_TIMEOUT (10 * 60 * 1000)
 #define SATELLITE_CONNECTED_TIMEOUT (10 * 60 * 1000)
-#define SATELLITE_DISCONNECTED_TIMEOUT (60 * 60 * 1000)
+#define SATELLITE_DISCONNECTED_TIMEOUT (20 * 60 * 1000)
 
 // NOT recommended to set the publish interval below 10 seconds when on satellite
 #define PUBLISH_INTERVAL (30000)
