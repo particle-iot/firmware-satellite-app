@@ -18,6 +18,9 @@
 #include "app_config.h"
 
 namespace {
+
+static const int NTN_PUBLISH_INTERVAL_MIN_S = 30;
+
 Logger cfgLog("app.cfg");
 
 // Each setting is sourced from a build-time environment variable defined in the
@@ -142,6 +145,12 @@ void loadAppConfig() {
     if (!g_cfg.lteEnabled && !g_cfg.ntnEnabled) {
         cfgLog.error("both LTE and NTN disabled; re-enabling LTE to keep the device usable");
         g_cfg.lteEnabled = true;
+    }
+
+    if (g_cfg.ntnPublishIntervalS < NTN_PUBLISH_INTERVAL_MIN_S) {
+        cfgLog.warn("NTN publish interval %lus is below the NTN allowed floor of 30s, raising it to 30s",
+            (unsigned long)g_cfg.ntnPublishIntervalS);
+        g_cfg.ntnPublishIntervalS = NTN_PUBLISH_INTERVAL_MIN_S;
     }
 
     cfgLog.info("App config:");

@@ -35,9 +35,9 @@ AppPublisher publisher(satellite, modem);
 // -----------------------------------------------------------------------------
 enum class AppState {
     Boot,              // init: enable the start radio, reset timers
+    AcquireLocation,   // get a GNSS fix (or fixed fallback) and set ntn_locfix
     CellularConnect,   // Particle.connect() issued; waiting for the cloud
     CellularOnline,    // connected on LTE; publishing on the LTE interval
-    AcquireLocation,   // get a GPS fix (or fixed fallback) and set ntn_locfix
     SatelliteConnect,  // satellite.begin()/connect(); waiting for NTN registration
     SatelliteOnline,   // connected on NTN; publishing on the NTN interval
     SwitchToSatellite, // tear down cloud + cellular, enable the Satellite radio
@@ -169,7 +169,6 @@ void acquireAndSetLocationFix() {
 // Active radio accessors
 // -----------------------------------------------------------------------------
 
-// Human-readable name of the currently enabled radio.
 const char* activeProfileName() {
     switch (modem.radioEnabled()) {
         case RADIO_CELLULAR:  return "Cellular";
@@ -178,7 +177,6 @@ const char* activeProfileName() {
     }
 }
 
-// Is the currently enabled radio connected?
 bool activeRadioConnected() {
     switch (modem.radioEnabled()) {
         case RADIO_CELLULAR:  return Particle.connected();
@@ -187,13 +185,11 @@ bool activeRadioConnected() {
     }
 }
 
-// Publish interval (seconds) for the currently enabled radio.
 uint32_t activePublishIntervalS() {
     return (modem.radioEnabled() == RADIO_SATELLITE) ? g_cfg.ntnPublishIntervalS
                                                      : g_cfg.ltePublishIntervalS;
 }
 
-// Human-readable name for a Device OS cellular access technology.
 const char* accessTechName(hal_net_access_tech_t rat) {
     switch (rat) {
         case NET_ACCESS_TECHNOLOGY_GSM:         return "GSM";
@@ -354,7 +350,7 @@ void updateConnectionTimers() {
     }
 }
 
-// Throttled (5 s) device status line: active profile, app state, time in
+// Device status line: active profile, app state, time in
 // state, time until next publish, and the active radio's signal / band. Pass
 // force=true to print immediately (e.g. right after a radio switch).
 void logStatusLine(bool force = false) {
@@ -367,7 +363,7 @@ void logStatusLine(bool force = false) {
     uint32_t timeInStateS = (millis() - stateEnterTime) / 1000UL;
 
     char line[256];
-    size_t off = snprintf(line, sizeof(line), "[%s][%s][Time In State: %lus]",
+    size_t off = snprintf(line, sizeof(line), "[%s][%s][In State: %lus]",
         activeProfileName(), stateName(appState), (unsigned long)timeInStateS);
 
     if (off < sizeof(line) && activeRadioConnected()) {
@@ -375,7 +371,7 @@ void logStatusLine(bool force = false) {
         uint32_t sinceLast = millis() - lastPublish;
         uint32_t untilNextS = (sinceLast >= intervalMs) ? 0 : (intervalMs - sinceLast) / 1000UL;
         off += snprintf(line + off, sizeof(line) - off,
-            "[Time Until Next Publish: %lus]", (unsigned long)untilNextS);
+            "[Publish in: %lus]", (unsigned long)untilNextS);
     }
 
     // NTN signal / band, refreshed by satellite.process().
@@ -384,7 +380,7 @@ void logStatusLine(bool force = false) {
         if (c.state[0] != '\0') {
             if (c.valid) {
                 off += snprintf(line + off, sizeof(line) - off,
-                    "[Sig: %s band=%d earfcn=%d RSRP=%ddBm RSRQ=%ddB RSSI=%ddBm SINR=%d]",
+                    "[Sig: %s band=%d earfcn=%d RSRP=%d RSRQ=%d RSSI=%d SINR=%d]",
                     c.state, c.band, c.earfcn, c.rsrp, c.rsrq, c.rssi, c.sinr);
             } else {
                 off += snprintf(line + off, sizeof(line) - off,
@@ -400,7 +396,7 @@ void logStatusLine(bool force = false) {
         CellularSignal sig = Cellular.RSSI();
         if (sig.isValid()) {
             off += snprintf(line + off, sizeof(line) - off,
-                "[Sig: %s RSRP=%.0fdBm RSRQ=%.0fdB Strength=%.0f%% Quality=%.0f%%]",
+                "[Sig: %s RSRP=%.0f RSRQ=%.0f Strength=%.0f%% Quality=%.0f%%]",
                 accessTechName(sig.getAccessTechnology()),
                 sig.getStrengthValue(), sig.getQualityValue(),
                 sig.getStrength(), sig.getQuality());
@@ -461,6 +457,20 @@ void loop()
         }
 
         // --------------------------------------------------------------------
+        case AppState::AcquireLocation:
+        {
+            // Acquire the location and program the modem's NTN location fix
+            // before either stack attempts to register. 
+            acquireAndSetLocationFix();
+            if (modem.radioEnabled() == RADIO_CELLULAR) {
+                transitionTo(AppState::CellularConnect);
+            } else {
+                transitionTo(AppState::SatelliteConnect);
+            }
+            break;
+        }
+
+        // --------------------------------------------------------------------
         case AppState::CellularConnect:
         {
             if (onEntry()) {
@@ -486,20 +496,6 @@ void loop()
             }
             if (Particle.connected()) {
                 runPublishTick();
-            }
-            break;
-        }
-
-        // --------------------------------------------------------------------
-        case AppState::AcquireLocation:
-        {
-            // Acquire the location and program the modem's NTN location fix
-            // before either stack attempts to register. 
-            acquireAndSetLocationFix();
-            if (modem.radioEnabled() == RADIO_CELLULAR) {
-                transitionTo(AppState::CellularConnect);
-            } else {
-                transitionTo(AppState::SatelliteConnect);
             }
             break;
         }

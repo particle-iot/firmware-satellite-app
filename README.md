@@ -8,7 +8,7 @@ An always-on satellite (NTN) demonstration blueprint for the Particle M635e plat
 
 - **LTE-M operation** with periodic publishing
 - **NTN (satellite) operation** with location-assisted acquisition
-- **LTE → NTN fallback** when LTE publishes haved failed beyond a configured timeout or LTE connectivity is not available
+- **LTE → NTN fallback** when LTE publishes have failed beyond a configured timeout or LTE connectivity is not available
 - **NTN → LTE recovery** via periodic LTE retry
 - **eSIM profile switching** between LTE and NTN profiles
 - **Single publish abstraction** that routes to LTE or NTN automatically
@@ -37,7 +37,7 @@ An always-on satellite (NTN) demonstration blueprint for the Particle M635e plat
 
 1. Connect the NTN antenna to the `CELL` connector on the M635e SOM.
 2. Go to [blueprints.particle.io/](https://blueprints.particle.io/m635e-ntn/) and select "Use this blueprint" and then "Deploy to my device"
-3. Go through the process at setup.particle.io to configure your device, installed the eSIM profiles and finally, this application
+3. Go through the process at setup.particle.io to configure your device, install the eSIM profiles and finally, this application
 4. Open a serial terminal to view USB Serial debug output ("particle serial monitor" from the CLI). As soon as programming is completed, it will begin to search for NTN satellites and connect to the Particle cloud. The default configuration is **NTN-first / NTN-only publishing**, so satellite behaviour is demonstrated immediately.
 5. Make sure you have a clear view of the sky (outdoors) for the device to connect. Initial Satellite registration can take up to 10 minutes. 
 
@@ -67,7 +67,7 @@ All runtime behaviour is defined in a single top-level `env.json` file. Workbenc
 | `FEATURE_NTN_ENABLED` | bool | `true` | Allow Satellite NTN as a connectivity stack. At least one of the two `FEATURE_*_ENABLED` flags must be true; LTE will be enabled if both are false. |
 | `START_ON_CELLULAR` | bool | `false` | Which radio the device boots on. `true` = LTE-M; `false` = NTN (useful for NTN-first demos). |
 | `LTE_PUBLISH_INTERVAL_S` | uint | `60` | Seconds between publishes while on LTE-M. |
-| `NTN_PUBLISH_INTERVAL_S` | uint | `300` | Seconds between publishes while on NTN. Do not set below `30`. |
+| `NTN_PUBLISH_INTERVAL_S` | uint | `180` | Seconds between publishes while on NTN. Cannot be set below `30`. |
 | `VITALS_INTERVAL_S` | uint | `600` | Seconds between periodic device-vitals publishes. Vitals are always published once on (re)connect regardless of this value; `0` disables the periodic refresh (on-connect only). |
 | `NTN_MAX_PAYLOAD_SIZE` | uint | `256` | Max on-wire frame size (header + body) for outbound NTN publishes. |
 | `CELLULAR_DISCONNECTED_TIMEOUT_S` | uint | `600` | Seconds disconnected on LTE before switching to Satellite. There is no cellular "connected" timeout — if LTE is up, we stay. |
@@ -75,10 +75,10 @@ All runtime behaviour is defined in a single top-level `env.json` file. Workbenc
 | `SATELLITE_DISCONNECTED_TIMEOUT_S` | uint | `600` | Seconds disconnected on Satellite (including while still acquiring — SEARCH/LIMSRV before attach) before switching back to Cellular. NTN attach can take minutes, so don't set this too low or the device gives up before it ever connects. |
 | `FORCE_CELLULAR_TO_SATELLITE_SWITCH` | bool | `false` | Bench testing only. When true, the LTE→NTN switch fires purely on `FORCE_C2S_SWITCH_TIMEOUT_S` after radio enable, ignoring LTE connection state. |
 | `FORCE_SATELLITE_TO_CELLULAR_SWITCH` | bool | `false` | Bench testing only. When true, the NTN→LTE switch fires purely on `FORCE_S2C_SWITCH_TIMEOUT_S` after radio enable, ignoring NTN connection state. |
-| `FORCE_C2S_SWITCH_TIMEOUT_S` | uint | `600` | Force-mode timeout for the LTE→NTN switch. Ignored unless `FORCE_CELLULAR_TO_SATELLITE_SWITCH` is true. |
-| `FORCE_S2C_SWITCH_TIMEOUT_S` | uint | `600` | Force-mode timeout for the NTN→LTE switch. Ignored unless `FORCE_SATELLITE_TO_CELLULAR_SWITCH` is true. |
+| `FORCE_C2S_SWITCH_TIMEOUT_S` | uint | `300` | Force-mode timeout for the LTE→NTN switch. Ignored unless `FORCE_CELLULAR_TO_SATELLITE_SWITCH` is true. |
+| `FORCE_S2C_SWITCH_TIMEOUT_S` | uint | `300` | Force-mode timeout for the NTN→LTE switch. Ignored unless `FORCE_SATELLITE_TO_CELLULAR_SWITCH` is true. |
 | `USE_ONBOARD_GNSS_FOR_LOCATION` | bool | `false` | Where the NTN location fix comes from. `false` = use the `PARTICLE_LOCATION_FIXED` coords below; never query the GNSS engine (no-antenna devices). `true` = use the onboard GNSS engine for up to `ONBOARD_GNSS_FIX_TIMEOUT_S`, then fall back to those coords. |
-| `ONBOARD_GNSS_FIX_TIMEOUT_S` | uint | `60` | Maximum seconds to wait for a GNSS fix when `USE_ONBOARD_GNSS_FOR_LOCATION` is `true` before giving up and using the fixed coords. Unused when it is `false`. |
+| `ONBOARD_GNSS_FIX_TIMEOUT_S` | uint | `300` | Maximum seconds to wait for a GNSS fix when `USE_ONBOARD_GNSS_FOR_LOCATION` is `true` before giving up and using the fixed coords. Unused when it is `false`. |
 | `PARTICLE_LOCATION_FIXED` | string | `"44.92653,-93.39767,283.0"` | Fixed location as `"<latitude>,<longitude>,<altitude>"` in decimal degrees / meters. Used directly when GNSS is disabled, and as the fallback when GNSS is enabled. Warned about if missing/invalid while `USE_ONBOARD_GNSS_FOR_LOCATION` is `false`. |
 
 ### Example Configurations
