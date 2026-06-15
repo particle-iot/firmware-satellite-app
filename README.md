@@ -63,7 +63,7 @@ All runtime behaviour is defined in a single top-level `env.json` file. Workbenc
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `FEATURE_LTE_ENABLED` | bool | `true` | Allow LTE-M as a connectivity stack. |
+| `FEATURE_LTE_ENABLED` | bool | `false` | Allow LTE-M as a connectivity stack. |
 | `FEATURE_NTN_ENABLED` | bool | `true` | Allow Satellite NTN as a connectivity stack. At least one of the two `FEATURE_*_ENABLED` flags must be true; LTE will be enabled if both are false. |
 | `START_ON_CELLULAR` | bool | `false` | Which radio the device boots on. `true` = LTE-M; `false` = NTN (useful for NTN-first demos). |
 | `LTE_PUBLISH_INTERVAL_S` | uint | `60` | Seconds between publishes while on LTE-M. |
@@ -77,9 +77,9 @@ All runtime behaviour is defined in a single top-level `env.json` file. Workbenc
 | `FORCE_SATELLITE_TO_CELLULAR_SWITCH` | bool | `false` | Bench testing only. When true, the NTN→LTE switch fires purely on `FORCE_S2C_SWITCH_TIMEOUT_S` after radio enable, ignoring NTN connection state. |
 | `FORCE_C2S_SWITCH_TIMEOUT_S` | uint | `600` | Force-mode timeout for the LTE→NTN switch. Ignored unless `FORCE_CELLULAR_TO_SATELLITE_SWITCH` is true. |
 | `FORCE_S2C_SWITCH_TIMEOUT_S` | uint | `600` | Force-mode timeout for the NTN→LTE switch. Ignored unless `FORCE_SATELLITE_TO_CELLULAR_SWITCH` is true. |
-| `LOC_SOURCE` | string | `"fixed"` | Where the NTN location fix comes from. `"fixed"` = use the `PARTICLE_LOCATION_FIXED` coords below; never query the GNSS engine (no-antenna devices). `"dynamic"` = try the modem's GNSS engine for up to `LOC_GPS_FIX_TIMEOUT_S`, then fall back to those coords. |
-| `LOC_GPS_FIX_TIMEOUT_S` | uint | `60` | Maximum seconds to wait for a GNSS fix in `dynamic` mode before giving up and using the fixed coords. Unused in `fixed` mode. |
-| `PARTICLE_LOCATION_FIXED` | string | `"44.92653,-93.39767,283.0"` | Fixed location as `"<latitude>,<longitude>,<altitude>"` in decimal degrees / meters. Used directly in `fixed` mode and as the fallback in `dynamic` mode. |
+| `USE_ONBOARD_GNSS_FOR_LOCATION` | bool | `false` | Where the NTN location fix comes from. `false` = use the `PARTICLE_LOCATION_FIXED` coords below; never query the GNSS engine (no-antenna devices). `true` = use the onboard GNSS engine for up to `ONBOARD_GNSS_FIX_TIMEOUT_S`, then fall back to those coords. |
+| `ONBOARD_GNSS_FIX_TIMEOUT_S` | uint | `60` | Maximum seconds to wait for a GNSS fix when `USE_ONBOARD_GNSS_FOR_LOCATION` is `true` before giving up and using the fixed coords. Unused when it is `false`. |
+| `PARTICLE_LOCATION_FIXED` | string | `"44.92653,-93.39767,283.0"` | Fixed location as `"<latitude>,<longitude>,<altitude>"` in decimal degrees / meters. Used directly when GNSS is disabled, and as the fallback when GNSS is enabled. Warned about if missing/invalid while `USE_ONBOARD_GNSS_FOR_LOCATION` is `false`. |
 
 ### Example Configurations
 
@@ -144,10 +144,10 @@ This layer centralises rate limiting (1 message / 30 s on NTN), payload sizing (
 
 ### Location Handling
 
-NTN attach requires location. `LOC_SOURCE` selects how it is obtained:
+NTN attach requires location. `USE_ONBOARD_GNSS_FOR_LOCATION` selects how it is obtained:
 
-1. `fixed` — use the `PARTICLE_LOCATION_FIXED` coordinates (`"lat,long,altitude"`) directly; the GNSS engine is never queried (no-antenna devices).
-2. `dynamic` — try the integrated GPS for up to `LOC_GPS_FIX_TIMEOUT_S`, then fall back to the `PARTICLE_LOCATION_FIXED` coordinates if no fix is obtained.
+1. `false` — use the `PARTICLE_LOCATION_FIXED` coordinates (`"lat,long,altitude"`) directly; the GNSS engine is never queried (no-antenna devices).
+2. `true` — use the onboard GNSS engine for up to `ONBOARD_GNSS_FIX_TIMEOUT_S`, then fall back to the `PARTICLE_LOCATION_FIXED` coordinates if no fix is obtained.
 
 Acquired location is cached and reused on each NTN attach attempt.
 

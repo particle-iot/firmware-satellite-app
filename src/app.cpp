@@ -136,18 +136,19 @@ bool satelliteShouldSwitchToCellular() {
 }
 
 // Acquire the location to program into the modem's NTN location fix, then hand
-// it to the satellite library. In Fixed mode we never query GNSS - we pass the
-// configured coords through and tell the library to short-circuit any later
-// getGNSSLocation() call (forceFixed=true). In Dynamic mode we try the GNSS
-// engine for up to locGpsFixTimeoutS and fall back to the fixed coords.
+// it to the satellite library. When the onboard GNSS engine is disabled we never
+// query GNSS - we pass the configured coords through and tell the library to
+// short-circuit any later getGNSSLocation() call (forceFixed=true). When it is
+// enabled we try the GNSS engine for up to onboardGnssFixTimeoutS and fall back to the
+// fixed coords.
 void acquireAndSetLocationFix() {
     double lat = g_cfg.locFixedLatitude;
     double lon = g_cfg.locFixedLongitude;
     double alt = g_cfg.locFixedAltitude;
-    const bool forceFixed = (g_cfg.locSource == LocSource::Fixed);
+    const bool forceFixed = !g_cfg.useOnboardGnssForLocation;
 
     if (!forceFixed) {
-        if (satellite.getGNSSLocation(g_cfg.locGpsFixTimeoutS * 1000UL) == 0) {
+        if (satellite.getGNSSLocation(g_cfg.onboardGnssFixTimeoutS * 1000UL) == 0) {
             auto p = satellite.lastPositionInfo();
             lat = p.latitude;
             lon = p.longitude;
@@ -214,7 +215,7 @@ const char* accessTechName(hal_net_access_tech_t rat) {
 
 static void publishLocationExample() {
     if (modem.radioEnabled() == RADIO_CELLULAR) {
-        if (satellite.getGNSSLocation(g_cfg.locGpsFixTimeoutS * 1000UL) == 0) {
+        if (satellite.getGNSSLocation(g_cfg.onboardGnssFixTimeoutS * 1000UL) == 0) {
             auto p = satellite.lastPositionInfo();
             pubLat = p.latitude;
             pubLon = p.longitude;

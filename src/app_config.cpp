@@ -55,53 +55,33 @@ void applyU32Env(const char* key, uint32_t& dest) {
     }
 }
 
-void applyLocSourceEnv(const char* key, LocSource& dest) {
-    String s;
-    if (!System.getEnv(key, s)) {
-        return; // not present
-    }
-    if (s.equalsIgnoreCase("fixed")) {
-        dest = LocSource::Fixed;
-    } else if (s.equalsIgnoreCase("dynamic")) {
-        dest = LocSource::Dynamic;
-    } else {
-        cfgLog.warn("env '%s'='%s' unrecognised; using default", key, s.c_str());
-    }
-}
-
-const char* locSourceName(LocSource s) {
-    switch (s) {
-        case LocSource::Fixed:   return "fixed";
-        case LocSource::Dynamic: return "dynamic";
-    }
-    return "?";
-}
-
 constexpr const char* kEnvLocationFixed = "PARTICLE_LOCATION_FIXED";
 
-void applyFixedLocationEnv() {
+// Returns true only when the env var is present AND parses to valid coordinates.
+bool applyFixedLocationEnv() {
     String val;
     if (!System.getEnv(kEnvLocationFixed, val)) {
-        return; // not defined; keep compiled default coordinates
+        return false;
     }
     double lat = 0, lon = 0, alt = 0;
     if (sscanf(val.c_str(), "%lf,%lf,%lf", &lat, &lon, &alt) != 3) {
         cfgLog.warn("env '%s'='%s' not in '<lat>,<lon>,<alt>' form; using defaults",
             kEnvLocationFixed, val.c_str());
-        return;
+        return false;
     }
     g_cfg.locFixedLatitude = lat;
     g_cfg.locFixedLongitude = lon;
     g_cfg.locFixedAltitude = alt;
     cfgLog.info("env '%s' sets fixed location: (%f, %f, %f)",
         kEnvLocationFixed, lat, lon, alt);
+    return true;
 }
 } // namespace
 
 
 // Defaults so the device boots correctly even if no env vars are set.
 AppConfig g_cfg = {
-    /* lteEnabled                     */ true,
+    /* lteEnabled                     */ false,
     /* ntnEnabled                     */ true,
     /* startOnCellular                */ false,
     /* ltePublishIntervalS            */ 60,
@@ -115,8 +95,8 @@ AppConfig g_cfg = {
     /* forceSatelliteToCellularSwitch */ false,
     /* forceC2sSwitchTimeoutS         */ 5 * 60,
     /* forceS2cSwitchTimeoutS         */ 5 * 60,
-    /* locSource                      */ LocSource::Fixed,
-    /* locGpsFixTimeoutS              */ 5 * 60,
+    /* useOnboardGnssForLocation      */ false,
+    /* onboardGnssFixTimeoutS         */ 5 * 60,
     /* locFixedLatitude               */ 44.92653,
     /* locFixedLongitude              */ -93.39767,
     /* locFixedAltitude               */ 283.0,
@@ -141,12 +121,22 @@ void loadAppConfig() {
     applyBoolEnv     ("FORCE_SATELLITE_TO_CELLULAR_SWITCH", g_cfg.forceSatelliteToCellularSwitch);
     applyU32Env      ("FORCE_C2S_SWITCH_TIMEOUT_S",         g_cfg.forceC2sSwitchTimeoutS);
     applyU32Env      ("FORCE_S2C_SWITCH_TIMEOUT_S",         g_cfg.forceS2cSwitchTimeoutS);
-    applyLocSourceEnv("LOC_SOURCE",                         g_cfg.locSource);
-    applyU32Env      ("LOC_GPS_FIX_TIMEOUT_S",              g_cfg.locGpsFixTimeoutS);
+    applyBoolEnv     ("USE_ONBOARD_GNSS_FOR_LOCATION",      g_cfg.useOnboardGnssForLocation);
+    applyU32Env      ("ONBOARD_GNSS_FIX_TIMEOUT_S",         g_cfg.onboardGnssFixTimeoutS);
 
     // Fixed coordinates come as a single "lat,lon,alt" value (decimal degrees /
-    // metres). Used directly in fixed mode and as the dynamic-mode fallback.
-    applyFixedLocationEnv();
+    // metres). Used directly when GNSS is disabled, and as the fallback when the
+    // onboard GNSS engine fails to get a fix.
+    const bool haveFixedLocation = applyFixedLocationEnv();
+
+    // When GNSS is disabled the fixed coords are the device's only location, so
+    // warn if they were not supplied.
+    if (!g_cfg.useOnboardGnssForLocation && !haveFixedLocation) {
+        cfgLog.warn("USE_ONBOARD_GNSS_FOR_LOCATION is false but '%s' is missing or invalid; "
+            "using compiled default coordinates (%f, %f, %f)",
+            kEnvLocationFixed,
+            g_cfg.locFixedLatitude, g_cfg.locFixedLongitude, g_cfg.locFixedAltitude);
+    }
 
     // At least one stack must be enabled.
     if (!g_cfg.lteEnabled && !g_cfg.ntnEnabled) {
@@ -173,8 +163,8 @@ void loadAppConfig() {
         (unsigned long)g_cfg.forceC2sSwitchTimeoutS,
         g_cfg.forceSatelliteToCellularSwitch ? "true" : "false",
         (unsigned long)g_cfg.forceS2cSwitchTimeoutS);
-    cfgLog.info("  loc: source=%s timeout=%lus fixed=(%f, %f, %f)",
-        locSourceName(g_cfg.locSource),
-        (unsigned long)g_cfg.locGpsFixTimeoutS,
+    cfgLog.info("  loc: useOnboardGnss=%s timeout=%lus fixed=(%f, %f, %f)",
+        g_cfg.useOnboardGnssForLocation ? "true" : "false",
+        (unsigned long)g_cfg.onboardGnssFixTimeoutS,
         g_cfg.locFixedLatitude, g_cfg.locFixedLongitude, g_cfg.locFixedAltitude);
 }

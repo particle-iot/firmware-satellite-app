@@ -34,18 +34,6 @@
 // =============================================================================
 
 
-// Where the device sources its NTN location fix.
-//   Fixed   : no GNSS antenna; always use the configured fixed coords. The GNSS
-//             engine is never queried.
-//   Dynamic : GNSS antenna present; try the GNSS engine for up to
-//             locGpsFixTimeoutS. If no fix is obtained the application falls
-//             back to the fixed coords so NTN attach can still proceed.
-enum class LocSource {
-    Fixed   = 0,
-    Dynamic = 1,
-};
-
-
 struct AppConfig {
     // ---- Feature toggles --------------------------------------------------
     // Enable / disable each connectivity stack at runtime. Both stacks are
@@ -105,10 +93,15 @@ struct AppConfig {
 
     // ---- Location (for NTN locfix) ---------------------------------------
     // NTN attach requires a location. The device programs it on the modem via
-    // AT+QNWCFG="ntn_locfix",... before registration. See LocSource above for
-    // the meaning of each option.
-    LocSource locSource;
-    uint32_t  locGpsFixTimeoutS;
+    // AT+QNWCFG="ntn_locfix",... before registration.
+    //   true  : GNSS antenna present; use the onboard GNSS engine to acquire a
+    //           fix, trying for up to onboardGnssFixTimeoutS. If no fix is obtained
+    //           the application falls back to the fixed coords below so NTN
+    //           attach can still proceed.
+    //   false : no GNSS antenna; always use the configured fixed coords. The
+    //           GNSS engine is never queried.
+    bool      useOnboardGnssForLocation;
+    uint32_t  onboardGnssFixTimeoutS;
     double    locFixedLatitude;
     double    locFixedLongitude;
     double    locFixedAltitude;
