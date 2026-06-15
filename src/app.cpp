@@ -98,7 +98,12 @@ bool cellularShouldSwitchToSatellite() {
         return false;
     }
     if (g_cfg.forceCellularToSatelliteSwitch) {
-        return radioTime && (millis() - radioTime > g_cfg.forceC2sSwitchTimeoutS * 1000UL);
+        if (radioTime && (millis() - radioTime > g_cfg.forceC2sSwitchTimeoutS * 1000UL)) {
+            Log.warn("SIMULATED LTE failure: FORCE_CELLULAR_TO_SATELLITE_SWITCH tripped after %lus on radio; switching to Satellite",
+                (unsigned long)g_cfg.forceC2sSwitchTimeoutS);
+            return true;
+        }
+        return false;
     }
     // Switch only after we have been continuously disconnected on LTE for the
     // timeout. connStateSince resets on connect, so it can't go stale.
@@ -114,7 +119,12 @@ bool satelliteShouldSwitchToCellular() {
         return false;
     }
     if (g_cfg.forceSatelliteToCellularSwitch) {
-        return radioTime && (millis() - radioTime > g_cfg.forceS2cSwitchTimeoutS * 1000UL);
+        if (radioTime && (millis() - radioTime > g_cfg.forceS2cSwitchTimeoutS * 1000UL)) {
+            Log.warn("SIMULATED Satellite failure: FORCE_SATELLITE_TO_CELLULAR_SWITCH tripped after %lus on radio; switching to Cellular",
+                (unsigned long)g_cfg.forceS2cSwitchTimeoutS);
+            return true;
+        }
+        return false;
     }
     // Apply the timeout for the state we are actually in, measured from the last
     // connect/disconnect flip: switch after satelliteConnectedTimeoutS connected

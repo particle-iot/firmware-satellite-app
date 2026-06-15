@@ -30,6 +30,7 @@ typedef enum {
 } radio_type_t;
 
 #define ICCID_LEN               (20)
+#define PROFILE_NAME_MAX        (65)    // SGP.22 profileName is <= 64 bytes, +1 for NUL
 
 typedef enum {
     ENABLE_DISABLE_SUCCESS                         = 0,
@@ -71,7 +72,9 @@ private:
     int isValidHexString(const char *str, int length);
     void stripTrailingF(char* iccid);
     void padIccidF(char* iccid);
-    int findIccids(const char *input, char results[][ICCID_LEN + 1], bool includeTestProfile);
+    void findProfileName(const char* start, const char* end, char* nameOut);
+    int findIccids(const char *input, char results[][ICCID_LEN + 1], bool includeTestProfile,
+            char names[][PROFILE_NAME_MAX] = nullptr);
     int getICCID(char* i, bool log);
 
     // Low-level eUICC (ES10) helpers, composed by enableDisableProfile().
@@ -85,7 +88,7 @@ private:
 
     int enableDisableProfile(int type, char* specifiedIccid, int radioType, bool validateExists = true);
     int findIccidByType(const char* inputBuffer, int inputBufferLen, char* matchedIccid, int radioType);
-    void updateCachedRadioType(char* iccid);
+    radio_type_t radioTypeForName(const char* name);
 
 };
 

@@ -75,14 +75,17 @@ namespace {
 
 #define ICCID_KIGEN_DEFAULT     "89000123456789012358"
 #define ICCID_KIGEN_TEST        "89000123456789012341"
-#define ICCID_TWILIO_PREFIX     "8988307"
-#define ICCID_SKYLO_PREFIX      "8988308"
-#define ICCID_PREFIX_LEN        (7)
+// Profiles are identified by their ES10c profileName (tag 92), not by ICCID prefix:
+// Twilio (IE Cellular) and Skylo (IE NTN) share the prefix 898830, and the extra
+// disambiguating digit is coincidental. Update these if a profile's name changes.
+#define PROFILE_NAME_CELLULAR   "Twilio"        // IE Cellular (Twilio) profileName
+#define PROFILE_NAME_SATELLITE  "Pod ENO"       // IE NTN (Skylo) profileName
 #define ICCID_RESULTS_MAX       (8)
 #define ICCID_MARKER            "5A0A"
 #define ICCID_MARKER_LEN        (4)
 #define ICCID_DISABLE           (0)
 #define ICCID_ENABLE            (1)
+#define PROFILE_NAME_TAG        "92"            // ES10c profileName TLV tag
 
 const int PROFILES_SIZE_MAX = 4096;
 char profiles[PROFILES_SIZE_MAX] = {0};
@@ -173,7 +176,48 @@ void ModemManager::padIccidF(char* iccid) {
     }
 }
 
-int ModemManager::findIccids(const char *input, char results[][ICCID_LEN + 1], bool includeTestProfile) {
+void ModemManager::findProfileName(const char* start, const char* end, char* nameOut) {
+    // Extract the ES10c profileName (TLV tag 92) for one profile. The name lives
+    // inside the profile's E3 block, after the 5A0A<iccid> and 9F7001<state> fields,
+    // encoded as "92" <len-byte> <name-bytes>, all ASCII-hex. Scan is bounded to
+    // [start, end) - typically up to the next ICCID marker - so a 92 belonging to a
+    // later profile is never picked up. Leaves an empty string if no tag is found.
+    nameOut[0] = 0;
+
+    const char* pos = strstr(start, PROFILE_NAME_TAG);
+    if (!pos || pos >= end) {
+        return;
+    }
+
+    const char* lenPos = pos + 2;          // 2 hex chars consumed by the tag
+    if (lenPos + 2 > end || isValidHexString(lenPos, 2) != 0) {
+        return;
+    }
+    char lenStr[3] = { lenPos[0], lenPos[1], 0 };
+    int nameBytes = (int)strtol(lenStr, NULL, 16);
+
+    const char* dataPos = lenPos + 2;      // start of the name's hex bytes
+    if (nameBytes <= 0 || dataPos + (nameBytes * 2) > end) {
+        return;
+    }
+
+    int outLen = nameBytes;
+    if (outLen > PROFILE_NAME_MAX - 1) {
+        outLen = PROFILE_NAME_MAX - 1;
+    }
+    for (int i = 0; i < outLen; i++) {
+        if (isValidHexString(dataPos + (i * 2), 2) != 0) {
+            nameOut[i] = 0;
+            return;
+        }
+        char byteStr[3] = { dataPos[i * 2], dataPos[(i * 2) + 1], 0 };
+        nameOut[i] = (char)strtol(byteStr, NULL, 16);
+    }
+    nameOut[outLen] = 0;
+}
+
+int ModemManager::findIccids(const char *input, char results[][ICCID_LEN + 1], bool includeTestProfile,
+        char names[][PROFILE_NAME_MAX]) {
     int count = 0;
     const char *pos = input;
 
@@ -187,6 +231,15 @@ int ModemManager::findIccids(const char *input, char results[][ICCID_LEN + 1], b
                 results[count][0] = 0; // remove
             } else {
                 results[count][ICCID_LEN] = 0;
+                if (names) {
+                    // Name lives between the end of this ICCID and the next ICCID marker.
+                    const char* nameStart = pos + ICCID_LEN;
+                    const char* nameEnd = strstr(nameStart, ICCID_MARKER);
+                    if (!nameEnd) {
+                        nameEnd = nameStart + strlen(nameStart);
+                    }
+                    findProfileName(nameStart, nameEnd, names[count]);
+                }
                 count++;
             }
 
@@ -205,9 +258,7 @@ int ModemManager::getICCID(char* i, bool log) {
     char iccid[30] = {0};
 
     int ret = Cellular.command(cbICCID, iccid, 10000, "AT+QCCID");
-    if ((ret == RESP_OK) && (strcmp(iccid, "") != 0)) {
-        // Log.info("SIM ICCID = %s", iccid);
-    } else {
+    if ((ret != RESP_OK) || (strcmp(iccid, "") == 0)) {
         Log.info("SIM ICCID NOT FOUND!");
         return -1;
     }
@@ -217,26 +268,11 @@ int ModemManager::getICCID(char* i, bool log) {
         strcpy(iccid, "");
         Log.error("getICCID: %d", ret);
         return -2;
-    } else {
-        if (log) {
-            const char* simType;
-            if (strcmp(iccid, ICCID_KIGEN_DEFAULT) == 0) {
-                simType = "Kigen Default Profile";
-            } else if (strcmp(iccid, ICCID_KIGEN_TEST) == 0) {
-                simType = "Kigen Test Profile";
-            } else if (strncmp(iccid, ICCID_TWILIO_PREFIX, ICCID_PREFIX_LEN) == 0) {
-                simType = "Twilio Super SIM";
-            } else if (strncmp(iccid, ICCID_SKYLO_PREFIX, ICCID_PREFIX_LEN) == 0) {
-                simType = "Skylo SIM";
-            } else {
-                simType = "Unknown";
-            }
-            Log.info("ICCID currently active: %s (%s)", iccid, simType);
-        }
     }
 
-    updateCachedRadioType(iccid);
-
+    if (log) {
+        Log.info("ICCID currently active: %s", iccid);
+    }
     strcpy(i, iccid);
     return 0;
 }
@@ -470,6 +506,7 @@ int ModemManager::esimProfiles(char* specifiedIccid, char* profilesBuffer, int p
     Cellular.command(cbCSIMint, &profileSize, 10000, "AT+CSIM=28,\"81E2910009BF2D065C045A9F7092\""); // returns +CSIM: 4,"614E"
     int iccidsFound = 0;
     char iccidList[ICCID_RESULTS_MAX][ICCID_LEN + 1];
+    char nameList[ICCID_RESULTS_MAX][PROFILE_NAME_MAX];
     if (profileSize > 0) {
         char requestData[32] = {0};
         memset(&csimResponse, 0, sizeof(csimResponse));
@@ -482,15 +519,21 @@ int ModemManager::esimProfiles(char* specifiedIccid, char* profilesBuffer, int p
         if (strlen(csimResponse) > 0) {
             // Test with 3 profiles (TEST, SKYLO, TWILIO) !!!! DO NOT TRY TO SET THIS DATA !!!!
             // iccidsFound = findIccids("+CSIM: 238,\"BF2D72A070E32D5A0A980010325476981032149F700100921B47534D412054532E343820584F5220546573742050726F66696C65E3255A0A980991080120002004309F7001009213536B796C6F202D204F7065726174696F6E616CE3185A0A988803070000155488619F70010192065477696C696F9000\"", iccidList, true /*includeTestProfile*/);
-            iccidsFound = findIccids(csimResponse, iccidList, true /*includeTestProfile*/);
+            iccidsFound = findIccids(csimResponse, iccidList, true /*includeTestProfile*/, nameList);
             // Log.info("iccidsFound: %d", iccidsFound);
             char temp_profiles[512] = {0};
             // if (!silent) {
             //     Log.info("\n");
             // }
             for (int i = 0; i < iccidsFound; i++) {
-                char temp[40] = {0};
-                sprintf(temp, "[%s, %s]", iccidList[i], strcmp(iccid, iccidList[i])==0 ? "enabled" : "disabled");
+                char temp[128] = {0};
+                bool isEnabled = (strcmp(iccid, iccidList[i]) == 0);
+                // Cache the active radio type by the enabled profile's name.
+                if (isEnabled) {
+                    cachedRadioType_ = radioTypeForName(nameList[i]);
+                }
+                sprintf(temp, "[%s, %s, %s]", iccidList[i], nameList[i],
+                        isEnabled ? "enabled" : "disabled");
                 if (!silent) {
                     Log.info("%s", temp);
                     strcat(temp_profiles, temp);
@@ -513,10 +556,10 @@ int ModemManager::esimProfiles(char* specifiedIccid, char* profilesBuffer, int p
                 }
             }
         } else {
-            Log.info("[]");
+            Log.error("No CSIM Response received: %s", csimResponse);
         }
     } else {
-        Log.info("[]");
+        Log.error("CSIM Profile Size: %d", profileSize);
     }
 
     return matched;
@@ -530,58 +573,63 @@ int ModemManager::esimDisable(char* specifiedIccid) {
     return enableDisableProfile(ICCID_DISABLE, specifiedIccid, RADIO_UNKNOWN);
 }
 
-int ModemManager::findIccidByType(const char* inputBuffer, int inputBufferLen, char* matchedIccid, int radioType) {
-    const char* p = inputBuffer;
+radio_type_t ModemManager::radioTypeForName(const char* name) {
+    if (strcmp(name, PROFILE_NAME_CELLULAR) == 0) {
+        return RADIO_CELLULAR;
+    } else if (strcmp(name, PROFILE_NAME_SATELLITE) == 0) {
+        return RADIO_SATELLITE;
+    }
+    return RADIO_UNKNOWN;
+}
 
+int ModemManager::findIccidByType(const char* inputBuffer, int inputBufferLen, char* matchedIccid, int radioType) {
+    // inputBuffer holds "[ICCID, name, status]" entries (see esimProfiles). Match on
+    // the profile name and return that profile's ICCID.
+    const char* targetName = (radioType == RADIO_CELLULAR)  ? PROFILE_NAME_CELLULAR :
+                             (radioType == RADIO_SATELLITE) ? PROFILE_NAME_SATELLITE : NULL;
+    if (!targetName) {
+        return -1;
+    }
+    int targetLen = strlen(targetName);
+
+    const char* p = inputBuffer;
     while ((p = strchr(p, '[')) != NULL) {
-        p++;
-        const char* end = strchr(p, ',');
-        if (!end || (end - p) < ICCID_PREFIX_LEN) {
-            p++;
+        p++;                                       // p -> ICCID
+        const char* iccidEnd = strchr(p, ',');
+        if (!iccidEnd) {
+            break;
+        }
+        const char* nameStart = iccidEnd + 1;
+        while (*nameStart == ' ') {                // skip ", " separator
+            nameStart++;
+        }
+        const char* nameEnd = strchr(nameStart, ',');
+        if (!nameEnd) {
+            p = iccidEnd + 1;
             continue;
         }
 
-        if ((radioType == RADIO_CELLULAR && strncmp(p, ICCID_TWILIO_PREFIX, ICCID_PREFIX_LEN) == 0) ||
-                (radioType == RADIO_SATELLITE && strncmp(p, ICCID_SKYLO_PREFIX, ICCID_PREFIX_LEN) == 0))
-        {
-            int len = end - p;
+        if ((nameEnd - nameStart) == targetLen && strncmp(nameStart, targetName, targetLen) == 0) {
+            int len = iccidEnd - p;
             if (len >= inputBufferLen) {
                 len = inputBufferLen - 1;
             }
             strncpy(matchedIccid, p, len);
             matchedIccid[len] = 0;
-
             return 0;
         }
 
-        p = end;
+        p = nameEnd;
     }
 
     return -1;
 }
 
-void ModemManager::updateCachedRadioType(char* iccid) {
-    if (strncmp(iccid, ICCID_TWILIO_PREFIX, ICCID_PREFIX_LEN) == 0) {
-        cachedRadioType_ = RADIO_CELLULAR;
-    } else if (strncmp(iccid, ICCID_SKYLO_PREFIX, ICCID_PREFIX_LEN) == 0) {
-        cachedRadioType_ = RADIO_SATELLITE;
-    } else {
-        cachedRadioType_ = RADIO_UNKNOWN;
-    }
-}
-
 radio_type_t ModemManager::radioEnabled() {
     if (cachedRadioType_ == RADIO_UNKNOWN) {
-        char iccid[ICCID_LEN + 1] = {0};
-        getICCID(iccid, /* log results */ false);
+        // esimProfiles() identifies the enabled profile and caches its radio type by name.
+        esimProfiles(NULL, profiles, PROFILES_SIZE_MAX);
     }
-
-    // switch (cachedRadioType_) {
-    //     case RADIO_UNKNOWN: Log.info("RADIO_UNKNOWN"); break;
-    //     case RADIO_CELLULAR: Log.info("RADIO_CELLULAR"); break;
-    //     case RADIO_SATELLITE: Log.info("RADIO_SATELLITE"); break;
-    // };
-    // delay(1000);
 
     return cachedRadioType_;
 }
