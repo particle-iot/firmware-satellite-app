@@ -59,15 +59,15 @@ namespace {
 
 } // namespace annonymous
 
-Satellite::Satellite() : begun_(false), registrationUpdateMs_(SATELLITE_NCP_REGISTRATION_UPDATE_FAST_MS)
+Satellite::Satellite() : 
+    begun_(false), 
+    nwConnectionDesired_(NW_STATE_IDLE),
+    registrationUpdateMs_(SATELLITE_NCP_REGISTRATION_UPDATE_FAST_MS) 
 {
-    nwConnectionDesired = NW_STATE_IDLE;
+
 }
 
 Satellite::~Satellite() {
-    if (begun_) {
-        // de-init stuff
-    }
 }
 
 int Satellite::cbCFUN(int type, const char* buf, int len, int* cfun)
@@ -99,21 +99,17 @@ int Satellite::cbQCFGEXTquery(int type, const char* buf, int len, int* rxlen)
 
 int Satellite::cbQIRDquery(int type, const char* buf, int len, int* rxlen)
 {
-    // Log.trace("%s", buf);
     //+QIRD: <total_receive_length>,<have_read_length>,<unread_length>
     if (rxlen) {
-        auto ret = sscanf(buf, "\r\n+QIRD: %*d,%*d,%d\r\n", rxlen);
-        // Log.info("ret: %d rxLen: %d", ret, *rxlen);
+        sscanf(buf, "\r\n+QIRD: %*d,%*d,%d\r\n", rxlen);
     }
     return WAIT;
 }
 
 int Satellite::cbQIRD(int type, const char* buf, int len, char* outBuf) {
-  // Log.trace("%s", buf);
   static int incomingPacketLength = 0;
   if (incomingPacketLength == 0) {
-    auto ret = sscanf(buf, "\r\n+QIRD: %d\r\n", &incomingPacketLength);
-    // Log.info("ret: %d incomingPacketLength: %d", ret, incomingPacketLength);
+    sscanf(buf, "\r\n+QIRD: %d\r\n", &incomingPacketLength);
   } else if(outBuf) {
     // skip the leading "\r\n" in the response and copy the hex data to outBuf for processing
     memcpy(outBuf, &buf[2], incomingPacketLength);
@@ -125,7 +121,6 @@ int Satellite::cbQIRD(int type, const char* buf, int len, char* outBuf) {
 
 int Satellite::cbQISENDEX(int type, const char* buf, int len, int* param)
 {
-    // Log.info("%s", buf);
     if (strstr(buf, "SEND OK")) {
         return RESP_OK;
     }
@@ -169,9 +164,11 @@ int Satellite::cbQENG(int type, const char* buf, int len, NtnServingCellInfo* in
     }
     NtnServingCellInfo p;
     // state, rat, duplex are quoted; cellId and tac are hex; the rest decimal.
+    // Example responses:
     // +QENG: "servingcell","SEARCH"
     // +QENG: "servingcell","LIMSRV","NTN NBIoT","FDD",901,98,DC379,9,7685,23,0,0,7D9,-123,-14,-108,85,17
     // +QENG: "servingcell","CONNECT","NTN NBIoT","FDD",901,98,DC379,9,7685,23,0,0,7D9,-126,-18,-107,75,
+    // +QENG: "servingcell","NOCONN","NTN NBIoT","FDD",901,98,2C480D,29,7689,23,0,0,7ED,-117,-13,-103,102,23
     int n = sscanf(buf,
             "\r\n+QENG: \"servingcell\",\"%11[^\"]\",\"%15[^\"]\",\"%7[^\"]\",%d,%d,%x,%d,%d,%d,%d,%d,%x,%d,%d,%d,%d,%d",
             p.state, p.rat, p.duplex, &p.mcc, &p.mnc, &p.cellId, &p.pcid, &p.earfcn,
@@ -222,12 +219,10 @@ int Satellite::waitAtResponse(unsigned int tries, unsigned int timeout) {
     return SYSTEM_ERROR_TIMEOUT;
 }
 
-int Satellite::begin() { // (const SatelliteConfig& conf) {
+int Satellite::begin() {
     begun_ = true;
     errorCount_ = 0;
-    // conf_ = conf;
-
-    ntnConnected = 0; // assume we need to reconnect
+    ntnConnected_ = 0; // assume we need to reconnect
 
     if (!Cellular.isOn() || Cellular.isOff()) {
         // Turn on the modem
@@ -297,13 +292,13 @@ int Satellite::begin() { // (const SatelliteConfig& conf) {
 }
 
 int Satellite::connect() {
-    nwConnectionDesired = NW_STATE_CONNECT;
-    nwConnected = NW_CONNECTED_INIT;
+    nwConnectionDesired_ = NW_STATE_CONNECT;
+    nwConnected_ = NW_CONNECTED_INIT;
     return 0;
 }
 
 int Satellite::connectImpl() {
-    if (nwConnectionDesired != NW_STATE_CONNECT || connected()) {
+    if (nwConnectionDesired_ != NW_STATE_CONNECT || connected()) {
         return 0;
     }
     if (!registered_) {
@@ -316,7 +311,7 @@ int Satellite::connectImpl() {
     }
     lastConnectAttempt = millis();
 
-    if (!ntnConnected) {
+    if (!ntnConnected_) {
         int r = 0;
 #if USE_NON_IP
         r = Cellular.command(2000, "AT+QCFGEXT=\"nipdcfg\",0,\"particle.io\"");
@@ -325,10 +320,10 @@ int Satellite::connectImpl() {
         }
         if (r == RESP_OK) {
             r = Cellular.command(2000, "AT+QCFGEXT=\"nipd\",1,30");
-            ntnConnected = 1;
+            ntnConnected_ = 1;
         } else {
-            ntnConnected = 0;
-            nwConnected = NW_CONNECTED_FAILED;
+            ntnConnected_ = 0;
+            nwConnected_ = NW_CONNECTED_FAILED;
         }
 #else
         Cellular.command(2000, "AT+QICSGP=1");
@@ -341,32 +336,32 @@ int Satellite::connectImpl() {
         r = Cellular.command(150 * 1000, "AT+QIOPEN=1,%d,\"UDP\",\"%s\",%d", UDP_CONNECT_ID, UDP_ENDPOINT_NAME, UDP_PORT);
 
         if (r == RESP_OK) {
-            ntnConnected = NW_CONNECTED_SUCCESS;
+            ntnConnected_ = NW_CONNECTED_SUCCESS;
         } else {
             Cellular.command(2000, "AT+QISTATE?");
-            ntnConnected = NW_CONNECTED_FAILED;
+            ntnConnected_ = NW_CONNECTED_FAILED;
         }
 #endif
     }
 
-    if (ntnConnected) {
+    if (ntnConnected_) {
         int r = proto_.connect();
         if (r < 0) {
             Log.error("CloudProtocol::connect() failed: %d", r);
-            nwConnected = NW_CONNECTED_FAILED;
+            nwConnected_ = NW_CONNECTED_FAILED;
             return r;
         }
         Log.info("Connected to the Satellite");
-        nwConnected = NW_CONNECTED_SUCCESS;
+        nwConnected_ = NW_CONNECTED_SUCCESS;
     }
 
     return 0;
 }
 
 int Satellite::disconnect() {
-    nwConnectionDesired = NW_STATE_DISCONNECT;
-    nwConnected = NW_CONNECTED_INIT;
-    ntnConnected = 0;
+    nwConnectionDesired_ = NW_STATE_DISCONNECT;
+    nwConnected_ = NW_CONNECTED_INIT;
+    ntnConnected_ = 0;
 
 #if !USE_NON_IP
     Cellular.command(2000, "AT+QICLOSE=%d", UDP_CONNECT_ID);
@@ -377,7 +372,7 @@ int Satellite::disconnect() {
 }
 
 bool Satellite::connected(void) {
-    return (nwConnected == NW_CONNECTED_SUCCESS) && (nwConnectionDesired == NW_STATE_CONNECT);
+    return (nwConnected_ == NW_CONNECTED_SUCCESS) && (nwConnectionDesired_ == NW_STATE_CONNECT);
 }
 
 // Sole owner of registration state. Polls registration on one timer, maintains
@@ -394,12 +389,12 @@ void Satellite::updateRegistration(bool force) {
     if (r) {
         noRegistrationTimer_ = 0;
         if (!registered_) {
-            nwConnected = NW_CONNECTED_INIT;
-            ntnConnected = 0;
+            nwConnected_ = NW_CONNECTED_INIT;
+            ntnConnected_ = 0;
         }
     } else {
-        nwConnected = NW_CONNECTED_INIT;
-        ntnConnected = 0;
+        nwConnected_ = NW_CONNECTED_INIT;
+        ntnConnected_ = 0;
         if (!noRegistrationTimer_) {
             noRegistrationTimer_ = millis();
         } else if (millis() - noRegistrationTimer_ > SATELLITE_NCP_NO_REGISTRATION_MS) {
@@ -576,8 +571,8 @@ int Satellite::processErrors() {
         errorCount_ = 0;
         registrationUpdateMs_ = SATELLITE_NCP_REGISTRATION_UPDATE_FAST_MS;
         registered_ = 1;
-        nwConnected = NW_CONNECTED_INIT;
-        ntnConnected = 0;
+        nwConnected_ = NW_CONNECTED_INIT;
+        ntnConnected_ = 0;
     }
     // TODO: Check for uncommanded band change
     // 0000001817 [ncp.at] TRACE: > AT+QCFG="band"

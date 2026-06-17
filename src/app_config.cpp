@@ -102,7 +102,7 @@ AppConfig g_cfg = {
     /* onboardGnssFixTimeoutS         */ 5 * 60,
     /* locFixedLatitude               */ 44.92653,
     /* locFixedLongitude              */ -93.39767,
-    /* locFixedAltitude               */ 283.0,
+    /* locFixedAltitude               */ 283,
 };
 
 

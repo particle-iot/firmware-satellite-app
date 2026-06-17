@@ -145,24 +145,23 @@ void acquireAndSetLocationFix() {
     double lat = g_cfg.locFixedLatitude;
     double lon = g_cfg.locFixedLongitude;
     double alt = g_cfg.locFixedAltitude;
-    const bool forceFixed = !g_cfg.useOnboardGnssForLocation;
 
-    if (!forceFixed) {
+    if (g_cfg.useOnboardGnssForLocation) {
         if (satellite.getGNSSLocation(g_cfg.onboardGnssFixTimeoutS * 1000UL) == 0) {
             auto p = satellite.lastPositionInfo();
             lat = p.latitude;
             lon = p.longitude;
             alt = p.altitude;
+            havePubLoc = true;
         } else {
-            Log.warn("No GNSS fix; using fixed fallback location");
+            Log.warn("No GNSS fix; using app default location");
         }
     }
 
     pubLat = lat;
     pubLon = lon;
     pubAlt = alt;
-    havePubLoc = true;
-    satellite.setLocationFix(lat, lon, alt, forceFixed);
+    satellite.setLocationFix(lat, lon, alt, !g_cfg.useOnboardGnssForLocation);
 }
 
 // -----------------------------------------------------------------------------
@@ -209,7 +208,7 @@ const char* accessTechName(hal_net_access_tech_t rat) {
 //   - any per-tick preparation (e.g. refresh the GNSS fix on cellular)
 //   - building a `Variant` payload and calling `publisher.publish(name, v)`
 
-static void publishLocationExample() {
+[[maybe_unused]] static void publishLocationExample() {
     if (modem.radioEnabled() == RADIO_CELLULAR) {
         if (satellite.getGNSSLocation(g_cfg.onboardGnssFixTimeoutS * 1000UL) == 0) {
             auto p = satellite.lastPositionInfo();
