@@ -163,7 +163,7 @@ private:
     double locAlt_ = 0;
     bool locFixValid_ = false;
     // When true, getGNSSLocation() returns the stored loc{Lat,Lon,Alt}_ without
-    // querying the GNSS engine. Set via setLocationFix(forceFixed=true).
+    // querying the GNSS engine.
     bool locForceFixed_ = false;
 
     size_t maxPayloadSize_ = 0;
@@ -180,7 +180,9 @@ private:
     static int cbQCFGEXTread(int type, const char* buf, int len, char* rxdata);
     static int cbQGPSLOC(int type, const char* buf, int len, GnssPositioningInfo* info);
     static int cbQENG(int type, const char* buf, int len, NtnServingCellInfo* info);
+    static int cbQNWCFGNTNLOCFIX(int type, const char* buf, int len, GnssPositioningInfo* info);
 
+    bool locFixMatches(const GnssPositioningInfo& cur) const;
     int isRegistered(void);
     int queryServingCell(void);
     int waitAtResponse(unsigned int tries, unsigned int timeout = 1000);

@@ -183,6 +183,32 @@ int Satellite::cbQENG(int type, const char* buf, int len, NtnServingCellInfo* in
     return WAIT;
 }
 
+// 0000307909 [ncp.at] TRACE: > AT+QNWCFG="ntn_locfix"
+// 0000307925 [ncp.at] TRACE: < +QNWCFG: "ntn_locfix",1,38.073146,-122.165430,111
+// 0000307946 [ncp.at] TRACE: < OK
+int Satellite::cbQNWCFGNTNLOCFIX(int type, const char* buf, int len, GnssPositioningInfo* info)
+{
+    if ((type == TYPE_PLUS) && info) {
+        if (sscanf(buf, "\r\n+QNWCFG: \"ntn_locfix\",%d,%lf,%lf,%f\r\n",
+                        &info->posMode,
+                        &info->latitude, &info->longitude, &info->altitude) == 4) {
+            info->valid = 1;
+            Log.info("Current NTN location fix: mode=%d, lat=%f, lon=%f, alt=%f",
+                info->posMode, info->latitude, info->longitude, info->altitude);
+        }
+    }
+    return WAIT;
+}
+
+// True if the modem's current ntn_locfix already matches our desired fixed fix within reason.
+bool Satellite::locFixMatches(const GnssPositioningInfo& cur) const {
+    constexpr double kCoordEps = 1e-4;
+    return cur.valid && cur.posMode == 1
+        && fabs(cur.latitude  - locLat_) < kCoordEps
+        && fabs(cur.longitude - locLon_) < kCoordEps
+        && lround(cur.altitude) == lround(locAlt_);
+}
+
 // Pure query: returns 1 if registered on a network, 0 otherwise.
 int Satellite::isRegistered() {
     char network[32] = "";
@@ -248,16 +274,44 @@ int Satellite::begin() {
 
     Cellular.command(2000, "AT+QGMR");
 
+    // Check if ntn_locfix needs to be set or unset
+    auto resetModem = false;
+    GnssPositioningInfo locFixSetting = {};
+    Cellular.command(cbQNWCFGNTNLOCFIX, &locFixSetting, 2000, "AT+QNWCFG=\"ntn_locfix\"");
+
+    if (locForceFixed_) {
+        if (!locFixMatches(locFixSetting)) {
+            Log.info("Programming NTN location fix: %f,%f,%d", locLat_, locLon_,  (int)lround(locAlt_));
+            Cellular.command(2000, "AT+QNWCFG=\"ntn_locfix\",1,%f,%f,%d", locLat_, locLon_,  (int)lround(locAlt_));
+            resetModem = true;
+        }
+    } else {
+        // If ntn is set and we need to unset it, do that and reset
+        if (locFixSetting.valid && (locFixSetting.posMode == 1)) {
+            Log.warn("Clearing NTN location fix");
+            Cellular.command(2000, "AT+QNWCFG=\"ntn_locfix\",0");
+            resetModem = true;
+        } else if (!locFixSetting.valid) {
+            Log.warn("No NTN location fix programmed; NTN registration may fail");
+        }
+    }
+
+    if (resetModem) {
+        Cellular.off();
+        Cellular.on();
+        if (!waitFor(Cellular.isOn, 60000)) {
+            return SYSTEM_ERROR_TIMEOUT;
+        }
+
+        waitAtResponse(10);
+        // Read back settings after reset
+        Cellular.command(2000, "AT+QNWCFG=\"ntn_locfix\"");
+    }
+
     Cellular.command(2000, "AT+QCFG=\"band\"");
     Cellular.command(2000, "AT+CEREG=2");
     Cellular.command(2000, "AT+CEREG?");
     Cellular.command(2000, "AT+COPS=3,0");
-
-    // Program the NTN location fix before registration. Skylo NTN attach
-    // requires a location; set it here (from a GPS fix or fixed fallback
-    // provided via setLocationFix())
-    Cellular.command(2000, "AT+QNWCFG=\"ntn_locfix\",1,%f,%f,%f", locLat_, locLon_, locAlt_);
-    Cellular.command(2000, "AT+QNWCFG=\"ntn_locfix\"");
 
     if (isRegistered()) {
         registered_ = 1;
