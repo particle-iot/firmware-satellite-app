@@ -88,6 +88,7 @@ int CloudProtocol::init(CloudProtocolConfig conf) {
     }
     MessageChannelConfig chanConf;
     chanConf.onSend(conf.onSend_);
+    chanConf.maxPayloadSize(conf.maxPayloadSize_);
     chanConf.onRequest([this](auto type, auto data, auto onResp) {
         return receiveRequest(type, std::move(data), std::move(onResp));
     });
@@ -151,7 +152,7 @@ int CloudProtocol::publishImpl(int code, std::optional<Variant> data) {
     }
     util::Buffer reqData;
     CHECK(util::encodeProtobuf(reqData, &reqMsg, &PB_CLOUD(EventRequest_msg)));
-    Log.trace("Sending Event request");
+    Log.trace("Sending Event request %d", code);
     CHECK(channel_.sendRequest(RequestType::EVENT, std::move(reqData), [](auto err, auto result, auto /* data */) {
         if (err < 0) {
             Log.error("Failed to send Event request: %d", err);

@@ -40,7 +40,7 @@ struct MessageChannel::OutRequest: RefCount {
 };
 
 MessageChannel::MessageChannel() :
-        maxPayloadSize_(100), // TODO
+        maxPayloadSize_(MessageChannelConfig::DEFAULT_MAX_PAYLOAD_SIZE),
         nextOutReqId_(0),
         sessId_(0),
         inited_(false) {
@@ -56,6 +56,7 @@ int MessageChannel::init(MessageChannelConfig conf) {
     if (!conf.onSend_ || conf.port_ < MIN_LORAWAN_APP_PORT || conf.port_ > MAX_LORAWAN_APP_PORT) {
         return Error::INVALID_ARGUMENT;
     }
+    maxPayloadSize_ = conf.maxPayloadSize_;
     conf_ = std::move(conf);
     inited_ = true;
     return 0;
@@ -129,7 +130,8 @@ int MessageChannel::changeMaxPayloadSize(size_t size) {
     if (!inited_) {
         return Error::INVALID_STATE;
     }
-    return Error::NOT_SUPPORTED; // TODO
+    maxPayloadSize_ = size;
+    return 0;
 }
 
 int MessageChannel::run() {
@@ -178,8 +180,16 @@ int MessageChannel::sendRequest(unsigned type, util::Buffer data, OnResponse onR
     char headerData[MAX_FRAME_HEADER_SIZE] = {};
     size_t headerSize = CHECK(encodeFrameHeader(headerData, sizeof(headerData), h));
 
+    const size_t frameSize = headerSize + data.size();
+    if (maxPayloadSize_ != 0 && frameSize > maxPayloadSize_) {
+        Log.warn("Frame too large: %u > %u bytes (header %u + body %u)",
+                 (unsigned)frameSize, (unsigned)maxPayloadSize_,
+                 (unsigned)headerSize, (unsigned)data.size());
+        return Error::TOO_LARGE;
+    }
+
     util::Buffer buf;
-    CHECK(buf.resize(headerSize + data.size()));
+    CHECK(buf.resize(frameSize));
     std::memcpy(buf.data(), headerData, headerSize);
     std::memcpy(buf.data() + headerSize, data.data(), data.size());
 

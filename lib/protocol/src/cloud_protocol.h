@@ -13,15 +13,23 @@ class CloudProtocol;
 
 class CloudProtocolConfig {
 public:
-    CloudProtocolConfig() = default;
+    CloudProtocolConfig() :
+            maxPayloadSize_(0) {
+    }
 
     CloudProtocolConfig& onSend(MessageChannel::OnSend fn) {
         onSend_ = std::move(fn);
         return *this;
     }
 
+    CloudProtocolConfig& maxPayloadSize(size_t size) {
+        maxPayloadSize_ = size;
+        return *this;
+    }
+
 private:
     MessageChannel::OnSend onSend_;
+    size_t maxPayloadSize_;
 
     friend class CloudProtocol;
 };

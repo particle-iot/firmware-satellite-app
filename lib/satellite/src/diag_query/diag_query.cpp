@@ -11,7 +11,7 @@
 #include "diag_query.h"
 #include <spark_wiring_logging.h>
 
-int getDiagValueUint(uint8_t id, uint32_t* res) {
+int getDiagValueUint(uint32_t id, uint32_t* res) {
     // Retrieve the source for diag
 
     const diag_source* DiagSource = nullptr;
@@ -36,7 +36,7 @@ int getDiagValueUint(uint8_t id, uint32_t* res) {
     return Error::NONE;
 }
 
-int getDiagValueInt(uint8_t id, int32_t* res) {
+int getDiagValueInt(uint32_t id, int32_t* res) {
     // Retrieve the source for diag
     const diag_source* DiagSource = nullptr;
     int result = diag_get_source((diag_id)id, &DiagSource, nullptr);
@@ -110,4 +110,41 @@ int getDiagnosticValue(uint32_t id, std::vector<uint8_t>* res) {
             break;
     }
     return result;
+}
+
+int getDiagnosticValue(uint32_t id, particle::Variant& out) {
+
+    const diag_source* DiagSource = nullptr;
+    int result = diag_get_source((diag_id)id, &DiagSource, nullptr);
+
+    if (result) {
+        return result;
+    }
+    if (DiagSource == nullptr) {
+        return Error::INVALID_STATE;
+    }
+
+    switch (DiagSource->type) {
+        case DIAG_TYPE_INT: {
+            int32_t val = 0;
+            result = getDiagValueInt(id, &val);
+            if (result) {
+                return result;
+            }
+            out = (int)val;
+            break;
+        }
+        case DIAG_TYPE_UINT: {
+            uint32_t val = 0;
+            result = getDiagValueUint(id, &val);
+            if (result) {
+                return result;
+            }
+            out = (unsigned)val;
+            break;
+        }
+        default:
+            return Error::NOT_SUPPORTED;
+    }
+    return Error::NONE;
 }

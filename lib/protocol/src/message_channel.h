@@ -26,8 +26,12 @@ public:
 
 class MessageChannelConfig {
 public:
+    // 0 means "no enforcement" - sendRequest() will accept any frame size.
+    static const size_t DEFAULT_MAX_PAYLOAD_SIZE = 0;
+
     MessageChannelConfig() :
-            port_(MessageChannelBase::DEFAULT_PORT) {
+            port_(MessageChannelBase::DEFAULT_PORT),
+            maxPayloadSize_(DEFAULT_MAX_PAYLOAD_SIZE) {
     }
 
     MessageChannelConfig& onRequest(MessageChannelBase::OnRequest fn) {
@@ -45,10 +49,16 @@ public:
         return *this;
     }
 
+    MessageChannelConfig& maxPayloadSize(size_t size) {
+        maxPayloadSize_ = size;
+        return *this;
+    }
+
 private:
     MessageChannelBase::OnRequest onReq_;
     MessageChannelBase::OnSend onSend_;
     unsigned port_;
+    size_t maxPayloadSize_;
 
     friend class MessageChannel;
 };

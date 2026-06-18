@@ -8,11 +8,11 @@ An always-on satellite (NTN) demonstration blueprint for the Particle M635e plat
 
 - **LTE-M operation** with periodic publishing
 - **NTN (satellite) operation** with location-assisted acquisition
-- **LTE → NTN fallback** when LTE publishes haved failed beyond a configured timeout
+- **LTE → NTN fallback** when LTE publishes have failed beyond a configured timeout or LTE connectivity is not available
 - **NTN → LTE recovery** via periodic LTE retry
 - **eSIM profile switching** between LTE and NTN profiles
 - **Single publish abstraction** that routes to LTE or NTN automatically
-- **Verbose UART diagnostics** — signal quality, satellite acquisition, state transitions, publish results, and timing estimates
+- **Verbose USBSerial diagnostics** — signal quality, satellite acquisition, state transitions, publish results, and timing estimates
 - **Simulated LTE loss mode** for testing fallback without leaving coverage
 - **Hardware watchdog** protection against stuck states
 - **Prebuilt NTN-first binary** for immediate experimentation
@@ -22,9 +22,9 @@ An always-on satellite (NTN) demonstration blueprint for the Particle M635e plat
 ### Hardware
 
 - Particle **M635e** (M-SoM with NTN support)
-- LTE-M antenna
 - NTN-capable antenna (see Particle docs for more info)
-- USB connection for UART/debug output
+- Optional GNSS antenna
+- USB connection for USBSerial debug output
 - Permanent power supply (this is an always-on application)
 
 ### Software
@@ -35,19 +35,19 @@ An always-on satellite (NTN) demonstration blueprint for the Particle M635e plat
 
 ## Quick Start
 
-1. Connect LTE and NTN antennas to the M635e.
+1. Connect the NTN antenna to the `CELL` connector on the M635e SOM.
 2. Go to [blueprints.particle.io/](https://blueprints.particle.io/m635e-ntn/) and select "Use this blueprint" and then "Deploy to my device"
-3. Go through the process at setup.particle.io to configure your device, installed the eSIM profiles and finally, this application
-4. Open a serial terminal to view UART debug output ("particle serial monitor" from the CLI). As soon as programming is completed, it will begin to search for NTN satellites and connect to the Particle cloud. The default configuration is **NTN-first / NTN-only publishing**, so satellite behaviour is demonstrated immediately.
-5. Make sure you have a clear view of the sky (outdoors or by a window) for the device to connect
+3. Go through the process at setup.particle.io to configure your device, install the eSIM profiles and finally, this application
+4. Open a serial terminal to view USB Serial debug output ("particle serial monitor" from the CLI). As soon as programming is completed, it will begin to search for NTN satellites and connect to the Particle cloud. The default configuration is **NTN-first / NTN-only publishing**, so satellite behaviour is demonstrated immediately.
+5. Make sure you have a clear view of the sky (outdoors) for the device to connect. Initial Satellite registration can take up to 10 minutes. 
 
 ## Customizing the Demo
 
 1. Download this blueprint from github and open in Particle Workbench
 2. Select M-SoM as the device type and then compile and upload the program by plugging in the device to your computer over USB
-3. Modify the config.h parameters to update if you are publishing from cellular, satellite or both!
+3. Modify the `env.json` parameters to update if you are publishing from cellular, satellite or both!
 
-On every boot the application resets to LTE-first mode internally (if enabled), resets all timers and the state machine, enables the watchdog, and reinitialises the modem.
+On every boot the application resets all timers and the state machine, enables the watchdog, and reinitialises the modem.
 
 ## Antenna Guidance
 
@@ -59,24 +59,27 @@ NTN connectivity is highly sensitive to antenna selection and placement:
 
 ## Configuration
 
-All runtime behaviour is defined in a single top-level configuration file:
+All runtime behaviour is defined in a single top-level `env.json` file. Workbench builds each key/value pair into the application binary as an environment variable, and the firmware reads them at boot (see `src/app_config.cpp`). Any variable that is missing or invalid falls back to the compiled default in `src/app_config.cpp`.
 
-| Option | Description | Default |
-|---|---|---|
-| LTE enable | Enable/disable LTE-M connectivity | varies by example config |
-| NTN enable | Enable/disable NTN connectivity | enabled |
-| LTE publish interval | How often to publish over LTE | — |
-| NTN publish interval | How often to publish over NTN | — |
-| LTE failure timeout | No successful LTE publish before switching to NTN | 15 minutes |
-| NTN retry duration | NTN time before retrying LTE | — |
-| NTN max message size | Payload size limit | 256 bytes |
-| NTN rate limit | Minimum publish spacing | 1 message / 30 s |
-| Location source | Fixed coordinates, or GPS with fixed fallback | — |
-| Vitals on connect | Publish vitals on each new connection | — |
-| Vitals rate limit | Vitals publish timing | — |
-| Fake LTE loss | Simulate LTE loss after LTE connects (with timeout) | disabled |
-
-All options are documented inline in the config file.
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `FEATURE_LTE_ENABLED` | bool | `false` | Allow LTE-M as a connectivity stack. |
+| `FEATURE_NTN_ENABLED` | bool | `true` | Allow Satellite NTN as a connectivity stack. At least one of the two `FEATURE_*_ENABLED` flags must be true; LTE will be enabled if both are false. |
+| `START_ON_CELLULAR` | bool | `false` | Which radio the device boots on. `true` = LTE-M; `false` = NTN (useful for NTN-first demos). |
+| `LTE_PUBLISH_INTERVAL_S` | uint | `60` | Seconds between publishes while on LTE-M. |
+| `NTN_PUBLISH_INTERVAL_S` | uint | `180` | Seconds between publishes while on NTN. Cannot be set below `30`. |
+| `VITALS_INTERVAL_S` | uint | `600` | Seconds between periodic device-vitals publishes. Vitals are always published once on (re)connect regardless of this value; `0` disables the periodic refresh (on-connect only). |
+| `NTN_MAX_PAYLOAD_SIZE` | uint | `256` | Max on-wire frame size (header + body) for outbound NTN publishes. |
+| `CELLULAR_DISCONNECTED_TIMEOUT_S` | uint | `600` | Seconds disconnected on LTE before switching to Satellite. There is no cellular "connected" timeout — if LTE is up, we stay. |
+| `SATELLITE_CONNECTED_TIMEOUT_S` | uint | `600` | Seconds connected on Satellite before switching back to test Cellular again. |
+| `SATELLITE_DISCONNECTED_TIMEOUT_S` | uint | `600` | Seconds disconnected on Satellite (including while still acquiring — SEARCH/LIMSRV before attach) before switching back to Cellular. NTN attach can take minutes, so don't set this too low or the device gives up before it ever connects. |
+| `FORCE_CELLULAR_TO_SATELLITE_SWITCH` | bool | `false` | Bench testing only. When true, the LTE→NTN switch fires purely on `FORCE_C2S_SWITCH_TIMEOUT_S` after radio enable, ignoring LTE connection state. |
+| `FORCE_SATELLITE_TO_CELLULAR_SWITCH` | bool | `false` | Bench testing only. When true, the NTN→LTE switch fires purely on `FORCE_S2C_SWITCH_TIMEOUT_S` after radio enable, ignoring NTN connection state. |
+| `FORCE_C2S_SWITCH_TIMEOUT_S` | uint | `300` | Force-mode timeout for the LTE→NTN switch. Ignored unless `FORCE_CELLULAR_TO_SATELLITE_SWITCH` is true. |
+| `FORCE_S2C_SWITCH_TIMEOUT_S` | uint | `300` | Force-mode timeout for the NTN→LTE switch. Ignored unless `FORCE_SATELLITE_TO_CELLULAR_SWITCH` is true. |
+| `USE_ONBOARD_GNSS_FOR_LOCATION` | bool | `false` | Where the NTN location fix comes from. `false` = use the `PARTICLE_LOCATION_FIXED` coords below; never query the GNSS engine (no-antenna devices). `true` = use the onboard GNSS engine for up to `ONBOARD_GNSS_FIX_TIMEOUT_S`, then fall back to those coords. |
+| `ONBOARD_GNSS_FIX_TIMEOUT_S` | uint | `300` | Maximum seconds to wait for a GNSS fix when `USE_ONBOARD_GNSS_FOR_LOCATION` is `true` before giving up and using the fixed coords. Unused when it is `false`. |
+| `PARTICLE_LOCATION_FIXED` | string | `"44.92653,-93.39767,283"` | Fixed location as `"<latitude>,<longitude>,<altitude>"` in decimal degrees / meters. Used directly when GNSS is disabled, and as the fallback when GNSS is enabled. Warned about if missing/invalid while `USE_ONBOARD_GNSS_FOR_LOCATION` is `false`. |
 
 ### Example Configurations
 
@@ -95,12 +98,37 @@ Use the **fake LTE loss** option to exercise the hybrid fallback lifecycle witho
 
 ### Connectivity Lifecycle
 
-1. LTE operation and publish success/failure monitoring
-2. LTE loss detection (no successful publish within timeout)
-3. NTN activation (eSIM profile switch, location-assisted attach)
-4. NTN publishing (size- and rate-limited)
-5. Periodic LTE restoration testing
-6. Return to LTE
+```
+                              ┌──────┐
+                              │ Boot │
+                              └──┬───┘
+                                 │ radioEnable(start radio)
+                                 ▼
+                       ┌──────────────────┐
+                       │ AcquireLocation  │      (one-shot, at boot only)
+                       └──────────┬───────┘
+        radioEnabled() == CELLULAR│ (else: SATELLITE)
+                  ┌───────────────┴───────────┐
+                  ▼                           ▼
+        ┌──────────────────┐        ┌──────────────────┐
+        │ CellularConnect  │        │ SatelliteConnect │
+        └────────┬─────────┘        └────────┬─────────┘
+                 │ Particle.connected()      │ satellite.connected()
+                 ▼                           ▼
+        ┌──────────────────┐        ┌──────────────────┐
+        │  CellularOnline  │        │ SatelliteOnline  │
+        └────────┬─────────┘        └────────┬─────────┘
+                 │ cellularShouldSwitch      │ satelliteShouldSwitch
+                 │ ToSatellite()             │ ToCellular()
+                 ▼                           ▼
+        ┌──────────────────┐        ┌──────────────────┐
+        │ SwitchToSatellite│        │ SwitchToCellular │
+        └──────────────────┘        └──────────────────┘
+        radioEnable OK              radioEnable OK
+        → SatelliteConnect          → CellularConnect
+
+   (any radioEnable / satellite.begin() failure → Fault → Boot)
+```
 
 **LTE failure definition:** LTE is considered unavailable when no successful LTE publish occurs within the configured timeout window — even if registration, attach, or partial connectivity succeeds.
 
@@ -109,19 +137,19 @@ Use the **fake LTE loss** option to exercise the hybrid fallback lifecycle witho
 The application exposes a single publish call that routes to the LTE or NTN stack based on the current operating mode:
 
 ```cpp
-SOMETHING.publish(payload);
+publisher.publish("event_name", eventData);
 ```
 
-This layer centralises rate limiting (1 message / 30 s on NTN), payload sizing (256-byte NTN limit), retries, logging, metrics, and publish accounting. Message types include vitals payloads, publishes, and subscribes (all rate-limited on NTN).
+This layer centralises rate limiting (1 message / 30 s on NTN), payload sizing (256-byte NTN limit), retries, logging, metrics, and publish accounting. Message types include vitals payloads, event publishes, and subscribes (all rate-limited on NTN).
 
 ### Location Handling
 
-NTN attach requires location. Sources, in order of preference:
+NTN attach requires location. `USE_ONBOARD_GNSS_FOR_LOCATION` selects how it is obtained:
 
-1. Hard-coded coordinates (environment variable captured during setup)
-2. GPS integrated into the application
+1. `false` — use the `PARTICLE_LOCATION_FIXED` coordinates (`"lat,long,altitude"`) directly; the GNSS engine is never queried (no-antenna devices).
+2. `true` — use the onboard GNSS engine for up to `ONBOARD_GNSS_FIX_TIMEOUT_S`, then fall back to the `PARTICLE_LOCATION_FIXED` coordinates if no fix is obtained.
 
-Acquired location is cached and reused on each NTN attach attempt, with background refresh where possible.
+Acquired location is cached and reused on each NTN attach attempt.
 
 ### Watchdog & Recovery
 
@@ -129,11 +157,14 @@ The application watchdog protects against stuck connection state machines, block
 
 ### LED Behaviour
 
-The system LED is overridden to clearly signal NTN acquisition status.
+When the NTN radio is enabled, the system LED is overridden to clearly signal NTN acquisition status:
+- Solid Green: NTN is searching 
+- Solid Cyan: NTN is successfully registered
+When on Cellular, the LED retains the normal particle behavior (ie blinking green for network registration, breathing cyan once registered and connected to the Particle cloud)
 
 ## Debug Output Interpretation
 
-The UART output is designed as a continuous NTN diagnostic environment. Expect to see:
+The USBSerial output is designed as a continuous NTN diagnostic environment. Expect to see:
 
 - **Startup banner** — full runtime configuration at boot
 - **Operating mode** — current mode (NTN vs LTE) reported continuously
@@ -148,8 +179,9 @@ The goal is that you can understand what the modem is doing even when an NTN con
 
 ## NTN Operational Expectations
 
-- Satellite acquisition can take significantly longer than LTE attach; the timing-estimate log lines show where the device is in the process.
+- Satellite acquisition can take significantly longer than LTE attach; the timing-estimate log lines show where the device is in the process. First attach can take ~10 minutes.
 - NTN payloads are limited to **256 bytes** and **1 message per 30 seconds** — the publish layer enforces both.
+- NTN latency per packet is on the order of ~10 seconds per message. 
 - A valid location is required before NTN attach.
 - Clear sky view is essential; use the diagnostic output to validate placement.
 
