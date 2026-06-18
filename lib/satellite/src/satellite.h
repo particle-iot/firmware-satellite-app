@@ -24,6 +24,16 @@
 
 #include <optional>
 
+// Secure UDP Phase 1 (CDS-UDP-v1) wraps the NTN UDP path. Set to 0 to fall back
+// to the legacy unauthenticated datagram + port for bring-up.
+#ifndef SECURE_UDP_ENABLED
+#define SECURE_UDP_ENABLED 1
+#endif
+
+#if SECURE_UDP_ENABLED
+#include "secure_udp_session.h"
+#endif
+
 const uint8_t NW_CONNECTED_INIT = 0;
 const uint8_t NW_CONNECTED_SUCCESS = 1;
 const uint8_t NW_CONNECTED_FAILED = 2;
@@ -169,6 +179,13 @@ private:
 
     size_t maxPayloadSize_ = 0;
     constrained::CloudProtocol proto_;
+
+#if SECURE_UDP_ENABLED
+    // Secure UDP session: wraps uplinks and verifies downlinks at the modem
+    // boundary. Counter watermarks persist to a flash file (stride rule, §6.2).
+    secure_udp::FlashCounterStore secureUdpStore_{"/secure_udp.ctr"};
+    secure_udp::SecureUdpSession secureUdp_;
+#endif
 
     char publishBuffer[1024] = {};
 

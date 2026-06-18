@@ -35,7 +35,14 @@ LOG_SOURCE_CATEGORY("ncp.client");
 #define USE_NON_IP 0
 // #define UDP_ENDPOINT_NAME "publish-receiver-udp.particle.io"
 #define UDP_ENDPOINT_NAME "13.219.177.65"
+#if SECURE_UDP_ENABLED
+// Phase 1 secure suite listens on its own UDP port (port-based versioning, §9);
+// the server default is 9932. TODO: confirm the deployed secure ingress
+// host:port before flashing to a real device.
+#define UDP_PORT 9932
+#else
 #define UDP_PORT 40000
+#endif
 #define UDP_CONNECT_ID 0
 
 namespace particle {
@@ -356,6 +363,17 @@ int Satellite::begin() {
         return r;
     }
 
+#if SECURE_UDP_ENABLED
+    // Derive the per-device keys (DCT private key + pinned cloud key) and load
+    // counter watermarks. On failure (e.g. Device Protection on, §7.1) we do NOT
+    // fall back to unauthenticated frames — tx() refuses to send until ready.
+    if (!secureUdp_.init(secureUdpStore_)) {
+        Log.error("Secure UDP init failed (device key unreadable? Device Protection on?)");
+    } else {
+        Log.info("Secure UDP session ready");
+    }
+#endif
+
     return 0;
 }
 
@@ -516,10 +534,24 @@ void Satellite::receiveData(void) {
             // Receive hex data
             if ((RESP_OK == atResponse) && recv) {
                 Log.info("%d Bytes Read", recv);
+#if SECURE_UDP_ENABLED
+                // Verify + strip the secure frame before handing the inner
+                // payload to the protocol layer. A bad tag or replayed counter
+                // is dropped silently (spec §6.2, §7.2).
+                const uint8_t* payload = nullptr;
+                size_t payloadLen = 0;
+                if (secureUdp_.verifyDownlink((const uint8_t*)rxData, (size_t)recv, payload, payloadLen)) {
+                    auto dataBuf = util::Buffer((char*)payload, payloadLen);
+                    proto_.receive(dataBuf, 223);
+                } else {
+                    Log.warn("Secure UDP downlink verify failed; dropping %d bytes", recv);
+                }
+#else
                 auto dataBuf = util::Buffer(rxData, recv);
                 LOG_DUMP(TRACE, dataBuf.data(), recv);
                 LOG_PRINTF(TRACE, "\r\n");
                 proto_.receive(dataBuf, 223);
+#endif
             } else {
                 Log.error("ERROR READING DATA!");
             }
@@ -531,6 +563,24 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
     if (!registered_ || !connected()) {
         return SYSTEM_ERROR_INVALID_STATE;
     }
+
+#if SECURE_UDP_ENABLED
+    // Wrap the protocol payload as an authenticated uplink frame before the
+    // existing hex-encode + QISENDEX. The secure layer is transparent to the
+    // CloudProtocol caller (spec §5–§7).
+    if (!secureUdp_.ready()) {
+        Log.error("Secure UDP not ready; dropping %u-byte uplink", (unsigned)len);
+        return SYSTEM_ERROR_INVALID_STATE;
+    }
+    uint8_t secureFrame[secure_udp::kUplinkOverheadBytes + 512];
+    const size_t frameLen = secureUdp_.protectUplink(buf, len, secureFrame, sizeof(secureFrame));
+    if (frameLen == 0) {
+        Log.error("Secure UDP protectUplink failed (payload=%u bytes)", (unsigned)len);
+        return SYSTEM_ERROR_TOO_LARGE;
+    }
+    buf = secureFrame;
+    len = frameLen;
+#endif
 
     auto hexBufSize = len * 2 + 1;
     std::unique_ptr<char[]> hexBuf(new(std::nothrow) char[hexBufSize]);
