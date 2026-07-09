@@ -34,7 +34,7 @@ LOG_SOURCE_CATEGORY("ncp.client");
 
 #define USE_NON_IP 0
 // #define UDP_ENDPOINT_NAME "publish-receiver-udp.particle.io"
-#define UDP_ENDPOINT_NAME "13.219.177.65"
+#define UDP_ENDPOINT_NAME "52.5.13.97"
 #if SECURE_UDP_ENABLED
 // Phase 1 secure suite listens on its own UDP port (port-based versioning, §9);
 // the server default is 9932. TODO: confirm the deployed secure ingress
@@ -521,14 +521,14 @@ void Satellite::receiveData(void) {
 
 #if USE_NON_IP
         atResponse = Cellular.command(cbQCFGEXTquery, &recv, 10000, "AT+QCFGEXT=\"nipdr\",0");
-#else 
+#else
         Cellular.command(2000, "AT+QISTATE?");
         atResponse = Cellular.command(cbQIRDquery, &recv, 60 * 1000, "AT+QIRD=%d,0", UDP_CONNECT_ID);
 #endif
         if ((RESP_OK == atResponse) && (recv > 0)) {
 #if USE_NON_IP
             atResponse = Cellular.command(cbQCFGEXTread, rxData, 10000, "AT+QCFGEXT=\"nipdr\",%d,1", recv);
-#else 
+#else
             atResponse = Cellular.command(cbQIRD, rxData, 10000, "AT+QIRD=%d,%d", UDP_CONNECT_ID, recv);
 #endif
             // Receive hex data
