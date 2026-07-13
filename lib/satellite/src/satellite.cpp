@@ -225,6 +225,17 @@ int Satellite::isRegistered() {
 int Satellite::queryServingCell() {
     servingCell_ = NtnServingCellInfo{};
     Cellular.command(cbQENG, &servingCell_, 2000, "AT+QENG=\"servingcell\"");
+
+    if (nwConnected_ == NW_CONNECTED_SUCCESS && strcmp(servingCell_.state, "CONNECT") != 0) {
+        proto_.disconnect();
+        ntnConnected_ = 0;
+        nwConnected_ = NW_CONNECTED_INIT;
+        // do not change state of nwConnectionDesired_ or ntnInit_, connection should come back on its own
+
+        Cellular.command(180000, "AT+CFUN=0");
+        Cellular.command(180000, "AT+CFUN=1");
+    }
+
     return servingCell_.state[0] ? 0 : -1;
 }
 
@@ -248,7 +259,10 @@ int Satellite::waitAtResponse(unsigned int tries, unsigned int timeout) {
 int Satellite::begin() {
     begun_ = true;
     errorCount_ = 0;
-    ntnConnected_ = 0; // assume we need to reconnect
+
+    // assume we need to reconnect
+    ntnInit_ = 0;
+    ntnConnected_ = 0;
 
     if (!Cellular.isOn() || Cellular.isOff()) {
         // Turn on the modem
@@ -365,7 +379,7 @@ int Satellite::connectImpl() {
     }
     lastConnectAttempt = millis();
 
-    if (!ntnConnected_) {
+    if (!ntnInit_) {
         int r = 0;
 #if USE_NON_IP
         r = Cellular.command(2000, "AT+QCFGEXT=\"nipdcfg\",0,\"particle.io\"");
@@ -374,10 +388,9 @@ int Satellite::connectImpl() {
         }
         if (r == RESP_OK) {
             r = Cellular.command(2000, "AT+QCFGEXT=\"nipd\",1,30");
-            ntnConnected_ = 1;
+            ntnInit_ = 1;
         } else {
-            ntnConnected_ = 0;
-            nwConnected_ = NW_CONNECTED_FAILED;
+            ntnInit_ = 0;
         }
 #else
         Cellular.command(2000, "AT+QICSGP=1");
@@ -390,12 +403,22 @@ int Satellite::connectImpl() {
         r = Cellular.command(150 * 1000, "AT+QIOPEN=1,%d,\"UDP\",\"%s\",%d", UDP_CONNECT_ID, UDP_ENDPOINT_NAME, UDP_PORT);
 
         if (r == RESP_OK) {
-            ntnConnected_ = NW_CONNECTED_SUCCESS;
+            ntnInit_ = 1;
         } else {
             Cellular.command(2000, "AT+QISTATE?");
-            ntnConnected_ = NW_CONNECTED_FAILED;
+            ntnInit_ = 0;
         }
 #endif
+    }
+
+    if (ntnInit_) {
+        queryServingCell();
+
+        if (strcmp(servingCell_.state, "CONNECT") == 0) {
+            ntnConnected_ = 1;
+        } else {
+            ntnConnected_ = 0;
+        }
     }
 
     if (ntnConnected_) {
@@ -403,6 +426,7 @@ int Satellite::connectImpl() {
         if (r < 0) {
             Log.error("CloudProtocol::connect() failed: %d", r);
             nwConnected_ = NW_CONNECTED_FAILED;
+            errorCount_++;
             return r;
         }
         Log.info("Connected to the Satellite");
@@ -413,9 +437,11 @@ int Satellite::connectImpl() {
 }
 
 int Satellite::disconnect() {
+    proto_.disconnect();
     nwConnectionDesired_ = NW_STATE_DISCONNECT;
     nwConnected_ = NW_CONNECTED_INIT;
     ntnConnected_ = 0;
+    ntnInit_ = 0;
 
 #if !USE_NON_IP
     Cellular.command(2000, "AT+QICLOSE=%d", UDP_CONNECT_ID);
@@ -448,6 +474,7 @@ void Satellite::updateRegistration(bool force) {
         }
     } else {
         nwConnected_ = NW_CONNECTED_INIT;
+        ntnInit_ = 0;
         ntnConnected_ = 0;
         if (!noRegistrationTimer_) {
             noRegistrationTimer_ = millis();
@@ -624,8 +651,9 @@ int Satellite::processErrors() {
         Cellular.command(20000, "AT+CFUN=1");
         errorCount_ = 0;
         registrationUpdateMs_ = SATELLITE_NCP_REGISTRATION_UPDATE_FAST_MS;
-        registered_ = 1;
+        registered_ = 0;
         nwConnected_ = NW_CONNECTED_INIT;
+        ntnInit_ = 0;
         ntnConnected_ = 0;
     }
     // TODO: Check for uncommanded band change

@@ -38,7 +38,8 @@ enum class AppState {
     AcquireLocation,   // get a GNSS fix (or fixed fallback) and set ntn_locfix
     CellularConnect,   // Particle.connect() issued; waiting for the cloud
     CellularOnline,    // connected on LTE; publishing on the LTE interval
-    SatelliteConnect,  // satellite.begin()/connect(); waiting for NTN registration
+    SatelliteInit,     // satellite.begin() NTN initialization
+    SatelliteConnect,  // satellite.connect(); waiting for NTN registration/connect
     SatelliteOnline,   // connected on NTN; publishing on the NTN interval
     SwitchToSatellite, // tear down cloud + cellular, enable the Satellite radio
     SwitchToCellular,  // tear down satellite, enable the Cellular radio
@@ -67,6 +68,7 @@ const char* stateName(AppState s) {
         case AppState::CellularConnect:   return "CellularConnect";
         case AppState::CellularOnline:    return "CellularOnline";
         case AppState::AcquireLocation:   return "AcquireLocation";
+        case AppState::SatelliteInit:     return "SatelliteInit";
         case AppState::SatelliteConnect:  return "SatelliteConnect";
         case AppState::SatelliteOnline:   return "SatelliteOnline";
         case AppState::SwitchToSatellite: return "SwitchToSatellite";
@@ -464,7 +466,7 @@ void loop()
             if (modem.radioEnabled() == RADIO_CELLULAR) {
                 transitionTo(AppState::CellularConnect);
             } else {
-                transitionTo(AppState::SatelliteConnect);
+                transitionTo(AppState::SatelliteInit);
             }
             break;
         }
@@ -500,9 +502,10 @@ void loop()
         }
 
         // --------------------------------------------------------------------
-        case AppState::SatelliteConnect:
+        case AppState::SatelliteInit:
         {
             if (onEntry()) {
+                logStatusLine(true /* forced */);
                 Log.info("SATELLITE BEGIN --------------------");
                 if (satellite.begin() != SYSTEM_ERROR_NONE) {
                     Log.error("Error initializing Satellite radio");
@@ -510,7 +513,18 @@ void loop()
                     transitionTo(AppState::Fault);
                     break;
                 }
-                satellite.process();
+            }
+
+            satellite.process();
+            transitionTo(AppState::SatelliteConnect);
+            break;
+        }
+
+        // --------------------------------------------------------------------
+        case AppState::SatelliteConnect:
+        {
+            if (onEntry()) {
+                logStatusLine(true /* forced */);
                 Log.info("SATELLITE CONNECT ---------------------");
                 satellite.connect();
             }
@@ -533,6 +547,10 @@ void loop()
             satellite.process();
             if (satellite.connected()) {
                 RGB.color(0,255,255);
+            } else {
+                RGB.color(0,255,0);
+                transitionTo(AppState::SatelliteConnect);
+                // no break, allow to fall through and check if we need to switch to cellular
             }
 
             if (satelliteShouldSwitchToCellular()) {
@@ -560,7 +578,7 @@ void loop()
                 logStatusLine(true /* forced */);
                 RGB.control(true);
                 RGB.color(0,255,0);
-                transitionTo(AppState::SatelliteConnect);
+                transitionTo(AppState::SatelliteInit);
             } else {
                 Log.error("Failed to enable Satellite radio");
                 transitionTo(AppState::Fault);
