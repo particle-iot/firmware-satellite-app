@@ -426,10 +426,6 @@ int ModemManager::enableDisableProfile(int type, char* specifiedIccid, int radio
             return ENABLE_DISABLE_ICCID_IS_ACTIVE;
         }
         strncpy(toEnable, specifiedIccid, ICCID_LEN);
-        // Disable the currently active (non-default) profile in the same session.
-        if (strlen(iccid) >= (ICCID_LEN - 1) && strncmp(iccid, ICCID_KIGEN_DEFAULT, ICCID_LEN) != 0) {
-            strncpy(toDisable, iccid, ICCID_LEN);
-        }
     } else { // ICCID_DISABLE
         if (strncmp(iccid, specifiedIccid, ICCID_LEN) != 0) {
             Log.info("Profile not active!");
@@ -449,13 +445,10 @@ int ModemManager::enableDisableProfile(int type, char* specifiedIccid, int radio
 
     openSimChannel();
     if (toDisable[0]) {
-        Log.info("Disabling currently active: %s", toDisable);
         strncpy(padded, toDisable, ICCID_LEN);
         padded[ICCID_LEN] = 0;
         padIccidF(padded);
         swapNibbles(padded, swapped);
-        // No refresh on the disable - we keep the channel intact and let the
-        // single CFUN cycle below make the modem adopt the final state.
         storeProfileState(ICCID_DISABLE, swapped, /* refresh */ false);
     }
     if (toEnable[0]) {
