@@ -21,6 +21,7 @@
 #include "app_config.h"
 #include "app_publisher.h"
 #include "diag_query/diag_query.h"
+#include "request_handler.h"
 
 SYSTEM_MODE(SEMI_AUTOMATIC);
 
@@ -407,6 +408,11 @@ void logStatusLine(bool force = false) {
     }
 
     Log.info("%s", line);
+}
+
+// App specific USB requests
+void ctrl_request_custom_handler(ctrl_request* req) {
+    particle::RequestHandler::instance()->process(req);
 }
 
 void setup()
