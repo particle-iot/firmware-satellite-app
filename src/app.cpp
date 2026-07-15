@@ -35,7 +35,9 @@ AppPublisher publisher(satellite, modem);
 // Application state machine
 // -----------------------------------------------------------------------------
 enum class AppState {
-    Boot,              // init: enable the start radio, reset timers
+    InitialConnect,    // optional initial connection to the Particle cloud
+    InitialOnline,     // hold the initial cloud connection, then disconnect
+    Start,             // init: enable the start radio, reset timers
     AcquireLocation,   // get a GNSS fix (or fixed fallback) and set ntn_locfix
     CellularConnect,   // Particle.connect() issued; waiting for the cloud
     CellularOnline,    // connected on LTE; publishing on the LTE interval
@@ -47,7 +49,7 @@ enum class AppState {
     Fault              // error / recovery (modem-reset escalation hook)
 };
 
-static AppState appState = AppState::Boot;
+static AppState appState = AppState::Start;
 static bool stateEntry = true;   // true on the first loop() after a transition
 uint32_t stateEnterTime = 0;     // millis() when the current state was entered
 
@@ -65,7 +67,9 @@ bool havePubLoc = false;
 
 const char* stateName(AppState s) {
     switch (s) {
-        case AppState::Boot:              return "Boot";
+        case AppState::InitialConnect:    return "InitialConnect";
+        case AppState::InitialOnline:     return "InitialOnline";
+        case AppState::Start:             return "Start";
         case AppState::CellularConnect:   return "CellularConnect";
         case AppState::CellularOnline:    return "CellularOnline";
         case AppState::AcquireLocation:   return "AcquireLocation";
@@ -439,8 +443,9 @@ void setup()
 
     modem.begin();
 
-    // Hardware is initialised; the Boot state selects and enables the start radio.
-    appState = AppState::Boot;
+    // Hardware is initialised. Perform the initial connection if configured, or
+    // start the state machine directly.
+    appState = (g_cfg.initialOnlineTimeoutS > 0) ? AppState::InitialConnect : AppState::Start;
     stateEntry = true;
     stateEnterTime = millis();
 }
@@ -452,7 +457,39 @@ void loop()
 
     switch (appState) {
         // --------------------------------------------------------------------
-        case AppState::Boot:
+        case AppState::InitialConnect:
+        {
+            if (onEntry()) {
+                Log.info("INITIAL CONNECT --------------------");
+                modem.radioEnable(RADIO_CELLULAR);
+                Particle.connect();
+            }
+            if (Particle.connected()) {
+            	Log.info("Connected to the cloud");
+                transitionTo(AppState::InitialOnline);
+            }
+            break;
+        }
+
+        // --------------------------------------------------------------------
+        case AppState::InitialOnline:
+        {
+            if (!Particle.connected()) {
+                Log.warn("Lost cloud connection early");
+                transitionTo(AppState::Start);
+                break;
+            }
+            if (millis() - stateEnterTime >= g_cfg.initialOnlineTimeoutS * 1000UL) {
+                Log.warn("Disconnecting initial cloud connection");
+                Particle.disconnect();
+                waitFor(Particle.disconnected, 60000);
+                transitionTo(AppState::Start);
+            }
+            break;
+        }
+
+        // --------------------------------------------------------------------
+        case AppState::Start:
         {
             if (g_cfg.startOnCellular && g_cfg.lteEnabled) {
                 Log.info("RADIO CELLULAR --------------------");
@@ -635,12 +672,12 @@ void loop()
         case AppState::Fault:
         {
             // Placeholder for recovery / modem-reset escalation (future work).
-            // For now, surface the fault and re-initialise from Boot.
+            // For now, surface the fault and re-initialise from Start.
             Log.error("FAULT state - re-initialising");
             RGB.control(true);
             RGB.color(255,0,0);
             delay(5000);
-            transitionTo(AppState::Boot);
+            transitionTo(AppState::Start);
             break;
         }
 
