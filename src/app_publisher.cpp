@@ -104,7 +104,7 @@ int AppPublisher::publishConstrained(const char* name, uint8_t code,
     // Single rate-limit bucket: every constrained-protocol event (including
     // vitals) is gated by the same minimum gap, regardless of transport.
     const uint32_t now = millis();
-    const uint32_t gapMs = g_cfg.ntnPublishIntervalS * 1000UL;
+    const uint32_t gapMs = NTN_PUBLISH_INTERVAL_MIN_S * 1000UL;
     if (!gapElapsed(ntnLastSendMs_, now, gapMs)) {
         ++stats_.rateLimited;
         pubLog.info("%s publish '%s' rate-limited (%lums since last, gap %lums)",

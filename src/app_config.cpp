@@ -19,8 +19,6 @@
 
 namespace {
 
-static const int NTN_PUBLISH_INTERVAL_MIN_S = 30;
-
 Logger cfgLog("app.cfg");
 
 // Each setting is sourced from a build-time environment variable defined in the
