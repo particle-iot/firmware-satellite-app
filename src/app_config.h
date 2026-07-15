@@ -51,6 +51,17 @@ struct AppConfig {
     // false = boot on Satellite (NTN). Useful for NTN-first demos.
     bool startOnCellular;
 
+    // ---- Constrained protocol over the normal connection (testing aid) ----
+    // When true, app publishes made while on the normal Device OS connection
+    // (cellular, or WiFi) are routed through the constrained protocol - the
+    // same CloudProtocol / secure-UDP datagram stack used over NTN, sent to
+    // the NTN ingress - INSTEAD of Particle.publish. The Particle cloud
+    // session stays up (OTA/console keep working) and the NTN rate limit
+    // still applies, so the wire behavior matches a satellite-attached
+    // device without waiting for an NTN attach. There is no fallback: if the
+    // secure-UDP session cannot initialize, publishes fail visibly in stats.
+    bool constrainedProtocolOnCellular;
+
     // ---- Publish timing ---------------------------------------------------
     // Per-stack publish cadence in seconds. Do NOT set the satellite interval
     // below 10 s.

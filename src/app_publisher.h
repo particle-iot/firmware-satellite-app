@@ -29,9 +29,18 @@
 // connected, the call is dropped and counted - the publisher never falls back
 // to the other stack. Mode switching is owned by the app state machine.
 //
-// NTN rate limit: a single bucket covers every NTN event (including vitals),
-// gated by g_cfg.ntnPublishIntervalS. LTE is not rate-limited at the app
-// layer (the cloud enforces its own limits).
+// Exception: when g_cfg.constrainedProtocolOnCellular is set, the cellular
+// branch routes through the constrained protocol (CloudProtocol/secure-UDP
+// datagrams) instead of Particle.publish, so the NTN wire path can be tested
+// over the normal connection. The NTN rate limit and size cap apply, results
+// count in the ntn* stats (ntnOk then means "handed to CloudProtocol/UDP",
+// not AT-accepted), and there is still no fallback: if the cellular transport
+// is not up, the publish is dropped and counted.
+//
+// NTN rate limit: a single bucket covers every constrained-protocol event
+// (including vitals) regardless of transport, gated by
+// g_cfg.ntnPublishIntervalS. LTE Particle.publish is not rate-limited at the
+// app layer (the cloud enforces its own limits).
 //
 // NTN size cap: enforced inside the satellite library (MessageChannel checks
 // header + body against the configured maxPayloadSize and returns
@@ -68,8 +77,17 @@ private:
     particle::ModemManager& modem_;
     Stats                   stats_;
 
-    // NTN last-publish timestamp (millis()). 0 = never sent.
+    // Constrained-protocol last-publish timestamp (millis()). 0 = never sent.
+    // One bucket across radio switches - the cloud-side pacing assumes a
+    // single device-wide cadence.
     uint32_t ntnLastSendMs_;
+
+    // Constrained-protocol send path shared by the satellite branch and the
+    // CONSTRAINED_PROTOCOL_ON_CELLULAR cellular branch: rate-limit gate,
+    // sat_.publish(), result-to-stats mapping. `via` labels the transport in
+    // logs.
+    int publishConstrained(const char* name, uint8_t code,
+        const particle::Variant& data, const char* via);
 };
 
 extern AppPublisher publisher;

@@ -555,6 +555,24 @@ void loop()
                 transitionTo(AppState::SwitchToSatellite);
                 break;
             }
+            if (g_cfg.constrainedProtocolOnCellular && Particle.connected()) {
+                if (satellite.cellularTransportActive()) {
+                    satellite.processCellularTransport();
+                } else {
+                    // Throttle retries so a persistent failure (e.g. Device
+                    // Protection blocking the device key) doesn't log-spam.
+                    // Publishes fail visibly in stats until this succeeds;
+                    // there is no fallback to Particle.publish.
+                    static uint32_t lastTransportAttempt = 0;
+                    if (lastTransportAttempt == 0 ||
+                            millis() - lastTransportAttempt >= 10000) {
+                        lastTransportAttempt = millis();
+                        if (satellite.beginCellularTransport() != 0) {
+                            Log.error("Failed to start constrained protocol over cellular");
+                        }
+                    }
+                }
+            }
             if (Particle.connected()) {
                 runPublishTick();
             } else {
@@ -629,6 +647,9 @@ void loop()
         case AppState::SwitchToSatellite:
         {
             Log.info("SWITCH to SATELLITE --------------------");
+            // Close the constrained-protocol UDP socket while the network is
+            // still up (safe no-op if the transport never started).
+            satellite.endCellularTransport();
             // NOTE: Very important to disconnect both Cloud and Cellular before switching to Satellite
             Particle.disconnect();
             waitFor(Particle.disconnected, 60000);

@@ -142,6 +142,26 @@ public:
 
     int process(bool force = false);
 
+    // ---- Constrained protocol over the normal Device OS connection --------
+    // Runs the same CloudProtocol + secure-UDP stack over a Device OS UDP
+    // socket while cellular/WiFi is the active connection (Device OS owns the
+    // modem there, so the NTN AT-socket path is unavailable). Both transports
+    // share the one secure-UDP session, so the per-direction counter space
+    // never forks across radio switches.
+    //
+    // beginCellularTransport() is idempotent; call it only once the network is
+    // up (Particle.connected()). endCellularTransport() must run before the
+    // network drops (e.g. ahead of a switch to the satellite profile) and is a
+    // safe no-op if the transport never started. processCellularTransport()
+    // is the cellular analog of process(): drive it every loop while the
+    // transport is active to poll for downlinks and run protocol timers.
+    int beginCellularTransport();
+    void endCellularTransport();
+    int processCellularTransport();
+    bool cellularTransportActive() const {
+        return transportMode_ == TransportMode::DEVICEOS_UDP && udpStarted_;
+    }
+
     GnssPositioningInfo lastPositionInfo(void) {
         return lastPositionInfo_;
     };
@@ -180,6 +200,19 @@ private:
     size_t maxPayloadSize_ = 0;
     constrained::CloudProtocol proto_;
 
+    // Which byte transport tx()/receive uses under the constrained protocol.
+    //   NTN_AT_SOCKET: app-owned modem, hex encode + AT+QISENDEX / AT+QIRD.
+    //   DEVICEOS_UDP : Device OS UDP socket over the normal connection.
+    enum class TransportMode {
+        NTN_AT_SOCKET,
+        DEVICEOS_UDP,
+    };
+
+    TransportMode transportMode_ = TransportMode::NTN_AT_SOCKET;
+    UDP udp_;
+    bool udpStarted_ = false;
+    uint32_t lastUdpReceiveCheck_ = 0;
+
 #if SECURE_UDP_ENABLED
     // Secure UDP session: wraps uplinks and verifies downlinks at the modem
     // boundary. Counter watermarks persist to a flash file (stride rule, §6.2).
@@ -208,8 +241,10 @@ private:
     void updateRegistration(bool force = false);
 
     void receiveData(void);
+    void handleInboundDatagram(char* data, size_t len);
     int processErrors(void);
     int connectImpl(void);
+    int initProtocolStack(void);
 };
 
 } // particle

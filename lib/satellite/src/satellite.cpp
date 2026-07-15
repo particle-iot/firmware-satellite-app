@@ -45,6 +45,15 @@ LOG_SOURCE_CATEGORY("ncp.client");
 #endif
 #define UDP_CONNECT_ID 0
 
+// Device OS UDP transport (constrained protocol over the normal connection).
+// kUdpEndpointIp must match UDP_ENDPOINT_NAME - the AT path takes the host as
+// a string, the Device OS UDP API takes an IPAddress. The fixed local port
+// keeps the device's NAT mapping stable so cloud downlinks (sent to the
+// source addr:port of the last verified uplink) stay routable between polls.
+static const IPAddress kUdpEndpointIp(52, 5, 13, 97);
+static const uint16_t kUdpLocalPort = 40223;
+static const size_t kUdpRxBufferSize = 320; // matches the NTN path's rxData[320]
+
 namespace particle {
 
 using namespace constrained;
@@ -350,6 +359,15 @@ int Satellite::begin() {
         Cellular.command(180000, "AT+CFUN=1");
     }
 
+    return initProtocolStack();
+}
+
+// Protocol stack + secure-UDP session init shared by both transports (NTN
+// begin() and beginCellularTransport()). Safe to call repeatedly:
+// CloudProtocol::init() is a no-op once initialized, and the secure session is
+// only (re)derived when not ready - each re-derivation burns up to a counter
+// stride, so it must not run again on every radio switch.
+int Satellite::initProtocolStack() {
     Log.trace("Initializing protocol handler");
     CloudProtocolConfig protoConf;
     protoConf.onSend([this](auto data, auto port, auto /* onAck */) {
@@ -367,13 +385,87 @@ int Satellite::begin() {
     // Derive the per-device keys (DCT private key + pinned cloud key) and load
     // counter watermarks. On failure (e.g. Device Protection on, §7.1) we do NOT
     // fall back to unauthenticated frames — tx() refuses to send until ready.
-    if (!secureUdp_.init(secureUdpStore_)) {
+    if (!secureUdp_.ready() && !secureUdp_.init(secureUdpStore_)) {
         Log.error("Secure UDP init failed (device key unreadable? Device Protection on?)");
     } else {
         Log.info("Secure UDP session ready");
     }
 #endif
 
+    return 0;
+}
+
+int Satellite::beginCellularTransport() {
+    if (cellularTransportActive()) {
+        return 0;
+    }
+
+    // No modem AT work here: on the cellular/WiFi profile Device OS owns the
+    // modem, so the datagram transport is a Device OS UDP socket riding the
+    // active network interface. The caller must have the network up
+    // (Particle.connected()) before starting.
+    int r = initProtocolStack();
+    if (r < 0) {
+        return r;
+    }
+#if SECURE_UDP_ENABLED
+    if (!secureUdp_.ready()) {
+        // No fallback to unauthenticated frames or Particle.publish - fail
+        // loudly and let the publisher stats surface it.
+        Log.error("Cellular transport unavailable: Secure UDP session not ready");
+        return SYSTEM_ERROR_INVALID_STATE;
+    }
+#endif
+
+    udp_.setBuffer(kUdpRxBufferSize);
+    if (!udp_.begin(kUdpLocalPort)) {
+        Log.error("UDP begin on port %u failed", (unsigned)kUdpLocalPort);
+        return SYSTEM_ERROR_NETWORK;
+    }
+    transportMode_ = TransportMode::DEVICEOS_UDP;
+    udpStarted_ = true;
+    lastUdpReceiveCheck_ = 0;
+    proto_.connect();
+    Log.info("Constrained protocol over Device OS UDP started (dst %s:%d, local port %u)",
+        UDP_ENDPOINT_NAME, UDP_PORT, (unsigned)kUdpLocalPort);
+    return 0;
+}
+
+void Satellite::endCellularTransport() {
+    if (!udpStarted_) {
+        return;
+    }
+    udp_.stop();
+    udpStarted_ = false;
+    transportMode_ = TransportMode::NTN_AT_SOCKET;
+    // Reset the channel so pending out-requests whose ACKs can no longer be
+    // routed don't linger; the NTN path re-connects the protocol later in
+    // connectImpl().
+    proto_.disconnect();
+    Log.info("Constrained protocol over Device OS UDP stopped");
+}
+
+int Satellite::processCellularTransport() {
+    if (!cellularTransportActive()) {
+        return SYSTEM_ERROR_INVALID_STATE;
+    }
+    // Same receive poll cadence as the NTN path - timing parity is the point
+    // of running the constrained protocol over this transport.
+    if (millis() - lastUdpReceiveCheck_ >= SATELLITE_NCP_RECEIVE_UPDATE_MS) {
+        lastUdpReceiveCheck_ = millis();
+        // Drain everything waiting: the cloud can release several queued
+        // downlinks between polls (one per verified uplink).
+        int n = 0;
+        while ((n = udp_.parsePacket()) > 0) {
+            char rxData[320] = "";
+            int len = udp_.read((unsigned char*)rxData, sizeof(rxData));
+            if (len > 0) {
+                Log.info("%d Bytes Read", len);
+                handleInboundDatagram(rxData, (size_t)len);
+            }
+        }
+    }
+    proto_.run();
     return 0;
 }
 
@@ -534,24 +626,7 @@ void Satellite::receiveData(void) {
             // Receive hex data
             if ((RESP_OK == atResponse) && recv) {
                 Log.info("%d Bytes Read", recv);
-#if SECURE_UDP_ENABLED
-                // Verify + strip the secure frame before handing the inner
-                // payload to the protocol layer. A bad tag or replayed counter
-                // is dropped silently (spec §6.2, §7.2).
-                const uint8_t* payload = nullptr;
-                size_t payloadLen = 0;
-                if (secureUdp_.verifyDownlink((const uint8_t*)rxData, (size_t)recv, payload, payloadLen)) {
-                    auto dataBuf = util::Buffer((char*)payload, payloadLen);
-                    proto_.receive(dataBuf, 223);
-                } else {
-                    Log.warn("Secure UDP downlink verify failed; dropping %d bytes", recv);
-                }
-#else
-                auto dataBuf = util::Buffer(rxData, recv);
-                LOG_DUMP(TRACE, dataBuf.data(), recv);
-                LOG_PRINTF(TRACE, "\r\n");
-                proto_.receive(dataBuf, 223);
-#endif
+                handleInboundDatagram(rxData, (size_t)recv);
             } else {
                 Log.error("ERROR READING DATA!");
             }
@@ -559,8 +634,35 @@ void Satellite::receiveData(void) {
     }
 }
 
+// Verify + dispatch one inbound datagram; shared by the NTN AT read path and
+// the Device OS UDP poll.
+void Satellite::handleInboundDatagram(char* data, size_t len) {
+#if SECURE_UDP_ENABLED
+    // Verify + strip the secure frame before handing the inner
+    // payload to the protocol layer. A bad tag or replayed counter
+    // is dropped silently (spec §6.2, §7.2).
+    const uint8_t* payload = nullptr;
+    size_t payloadLen = 0;
+    if (secureUdp_.verifyDownlink((const uint8_t*)data, len, payload, payloadLen)) {
+        auto dataBuf = util::Buffer((char*)payload, payloadLen);
+        proto_.receive(dataBuf, 223);
+    } else {
+        Log.warn("Secure UDP downlink verify failed; dropping %u bytes", (unsigned)len);
+    }
+#else
+    auto dataBuf = util::Buffer(data, len);
+    LOG_DUMP(TRACE, dataBuf.data(), len);
+    LOG_PRINTF(TRACE, "\r\n");
+    proto_.receive(dataBuf, 223);
+#endif
+}
+
 int Satellite::tx(const uint8_t* buf, size_t len, int port) {
-    if (!registered_ || !connected()) {
+    if (transportMode_ == TransportMode::DEVICEOS_UDP) {
+        if (!udpStarted_ || !Particle.connected()) {
+            return SYSTEM_ERROR_INVALID_STATE;
+        }
+    } else if (!registered_ || !connected()) {
         return SYSTEM_ERROR_INVALID_STATE;
     }
 
@@ -581,6 +683,21 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
     buf = secureFrame;
     len = frameLen;
 #endif
+
+    if (transportMode_ == TransportMode::DEVICEOS_UDP) {
+        // Raw datagram over the Device OS socket; no hex/AT framing. A send
+        // failure here must NOT feed errorCount_ - that counter drives the
+        // NTN modem (CFUN) recovery in processErrors(), and a UDP failure on
+        // the normal connection must not queue a modem reset for the next
+        // NTN session.
+        int sent = udp_.sendPacket(buf, len, kUdpEndpointIp, UDP_PORT);
+        if (sent < (int)len) {
+            Log.error("UDP sendPacket failed: %d (%u bytes)", sent, (unsigned)len);
+            return -1;
+        }
+        Log.info("Bytes Sent %u", (unsigned)len);
+        return 0;
+    }
 
     auto hexBufSize = len * 2 + 1;
     std::unique_ptr<char[]> hexBuf(new(std::nothrow) char[hexBufSize]);
