@@ -418,6 +418,21 @@ void logStatusLine(bool force = false) {
         }
     }
 
+#if SECURE_UDP_ENABLED
+    // Downlink secure-verification failures, only once any occurred.
+    {
+        const auto& rx = satellite.secureRxStats();
+        if (off < sizeof(line) && (rx.malformed || rx.badTag || rx.replay ||
+                rx.persistFailed || rx.notReady)) {
+            off += snprintf(line + off, sizeof(line) - off,
+                "[SecRx: mal=%lu tag=%lu rep=%lu pfail=%lu nr=%lu]",
+                (unsigned long)rx.malformed, (unsigned long)rx.badTag,
+                (unsigned long)rx.replay, (unsigned long)rx.persistFailed,
+                (unsigned long)rx.notReady);
+        }
+    }
+#endif
+
     Log.info("%s", line);
 }
 

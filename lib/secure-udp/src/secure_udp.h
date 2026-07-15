@@ -49,6 +49,21 @@ constexpr char kHkdfInfoDownlink[] = "CDS-UDP-v1 downlink auth";
 constexpr size_t kHkdfInfoUplinkLen = sizeof(kHkdfInfoUplink) - 1;   // no NUL on the wire
 constexpr size_t kHkdfInfoDownlinkLen = sizeof(kHkdfInfoDownlink) - 1;
 
+// ---- Operation status ---------------------------------------------------------
+// Distinguishes the failure modes the caller must treat differently: a storage
+// failure after a valid tag is an operational fault, not an attack, and a
+// too-large payload must not be conflated with either.
+enum class Status : uint8_t {
+    Ok = 0,
+    NotReady,          // session/context not initialized
+    Malformed,         // datagram too short to parse
+    BadTag,            // authentication failed (or counter outside the window)
+    Replay,            // authenticated but does not advance the replay floor
+    CounterExhausted,  // 48-bit counter space exhausted
+    PersistFailed,     // counter watermark persistence failed
+    TooLarge,          // frame does not fit the output buffer
+};
+
 // ---- Frame codec -------------------------------------------------------------
 // Parsed views point into the caller's datagram buffer; no copies, no heap.
 struct ParsedUplink {
@@ -129,9 +144,11 @@ public:
 
     // Verifies a downlink datagram (counterLow ‖ payload ‖ tag) against the
     // device's own Key Identifier and kDown, reconstructing the counter above
-    // windowFloor (§6.2/§6.3). On success, payloadOut points into datagram.
+    // windowFloor (§6.2/§6.3). On Ok, payloadOut points into datagram.
     // The caller advances the floor via StridedCounters::acceptDownlink.
-    bool verifyDownlink(const uint8_t* datagram, size_t len, uint64_t windowFloor,
+    // Failure modes: Malformed (too short), CounterExhausted (no counter above
+    // the floor), BadTag (authentication failed).
+    Status verifyDownlink(const uint8_t* datagram, size_t len, uint64_t windowFloor,
             uint64_t& counter48Out, const uint8_t*& payloadOut, size_t& payloadLenOut) const;
 
     const uint8_t* z() const { return z_; }
@@ -171,8 +188,9 @@ public:
     bool init(CounterStore& store, uint32_t stride);
 
     // Next uplink send counter (first ever: 1); persists ahead when crossing
-    // the watermark. Returns false on persist failure or counter exhaustion.
-    bool nextUplink(uint64_t& out);
+    // the watermark. Fails with NotReady (init() never ran), CounterExhausted,
+    // or PersistFailed — the counter is not consumed on failure.
+    Status nextUplink(uint64_t& out);
 
     // Advance the uplink counter without sending (fault injection / testing).
     void jumpUplink(uint64_t n) { uplinkNext_ += n; }
@@ -182,13 +200,13 @@ public:
     // above anything accepted before.
     uint64_t downlinkFloor() const { return downlinkFloor_; }
 
-    // Record an accepted downlink counter. False if it does not advance the
-    // floor (replay / stale) or persistence fails.
-    bool acceptDownlink(uint64_t counter48);
+    // Record an accepted downlink counter. Fails with Replay if it does not
+    // advance the floor (stale / duplicate) or PersistFailed. On PersistFailed
+    // neither the floor nor the watermark moves, so the caller must drop the
+    // datagram; the cloud's retransmission is accepted once storage recovers.
+    Status acceptDownlink(uint64_t counter48);
 
 private:
-    bool persist();
-
     CounterStore* store_ = nullptr;
     uint32_t stride_ = 256;
     uint64_t uplinkNext_ = 1;

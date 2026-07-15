@@ -54,6 +54,15 @@ static const IPAddress kUdpEndpointIp(52, 5, 13, 97);
 static const uint16_t kUdpLocalPort = 40223;
 static const size_t kUdpRxBufferSize = 320; // matches the NTN path's rxData[320]
 
+// Canonical on-wire datagram cap for outbound frames on both transports: the
+// modem's AT-command body limit (256 raw bytes = 512 hex chars on the QISENDEX
+// line). The Device OS UDP path could carry more, but both transports share one
+// secure session and one cap so frame admission never depends on the active
+// transport. The configured max payload size is clamped to this, the protocol
+// layer's frame limit and tx()'s secure scratch buffer are both derived from
+// it, and tx() re-checks the wrapped frame against it before sending.
+static const size_t kMaxWireDatagramBytes = 256;
+
 namespace particle {
 
 using namespace constrained;
@@ -374,7 +383,28 @@ int Satellite::initProtocolStack() {
         return tx((const uint8_t*)data.data(), data.size(), port);
     });
 
-    protoConf.maxPayloadSize(maxPayloadSize_);
+    // The configured cap is the ON-WIRE datagram limit. Clamp out-of-range
+    // values to the transport maximum rather than admitting frames the modem
+    // cannot carry (too high) or that no frame can ever fit (too low).
+    size_t minWireCap = 1;
+#if SECURE_UDP_ENABLED
+    static_assert(secure_udp::kUplinkOverheadBytes < kMaxWireDatagramBytes,
+            "secure overhead must leave room for a payload");
+    minWireCap = secure_udp::kUplinkOverheadBytes + 1;
+#endif
+    if (maxPayloadSize_ < minWireCap || maxPayloadSize_ > kMaxWireDatagramBytes) {
+        Log.warn("Max payload size %u out of range; clamping to %u",
+            (unsigned)maxPayloadSize_, (unsigned)kMaxWireDatagramBytes);
+        maxPayloadSize_ = kMaxWireDatagramBytes;
+    }
+    size_t maxProtoFrame = maxPayloadSize_;
+#if SECURE_UDP_ENABLED
+    // The secure frame wraps the protocol frame in kUplinkOverheadBytes of
+    // KeyId/CounterLow/Tag, so the protocol layer only gets the remainder —
+    // otherwise a cap-sized frame would leave tx() as cap + overhead bytes.
+    maxProtoFrame -= secure_udp::kUplinkOverheadBytes;
+#endif
+    protoConf.maxPayloadSize(maxProtoFrame);
     int r = proto_.init(protoConf);
     if (r < 0) {
         Log.error("CloudProtocol::init() failed: %d", r);
@@ -383,13 +413,15 @@ int Satellite::initProtocolStack() {
 
 #if SECURE_UDP_ENABLED
     // Derive the per-device keys (DCT private key + pinned cloud key) and load
-    // counter watermarks. On failure (e.g. Device Protection on, §7.1) we do NOT
-    // fall back to unauthenticated frames — tx() refuses to send until ready.
+    // counter watermarks. On failure (e.g. Device Protection on, §7.1) there is
+    // no fallback to unauthenticated frames — fail here so begin() /
+    // beginCellularTransport() report the fault instead of coming up "online"
+    // with an uplink that can never send.
     if (!secureUdp_.ready() && !secureUdp_.init(secureUdpStore_)) {
         Log.error("Secure UDP init failed (device key unreadable? Device Protection on?)");
-    } else {
-        Log.info("Secure UDP session ready");
+        return SYSTEM_ERROR_INVALID_STATE;
     }
+    Log.info("Secure UDP session ready");
 #endif
 
     return 0;
@@ -404,18 +436,13 @@ int Satellite::beginCellularTransport() {
     // modem, so the datagram transport is a Device OS UDP socket riding the
     // active network interface. The caller must have the network up
     // (Particle.connected()) before starting.
+    // initProtocolStack() fails when the secure session cannot initialize —
+    // there is no fallback to unauthenticated frames or Particle.publish; the
+    // publisher stats surface the dropped publishes.
     int r = initProtocolStack();
     if (r < 0) {
         return r;
     }
-#if SECURE_UDP_ENABLED
-    if (!secureUdp_.ready()) {
-        // No fallback to unauthenticated frames or Particle.publish - fail
-        // loudly and let the publisher stats surface it.
-        Log.error("Cellular transport unavailable: Secure UDP session not ready");
-        return SYSTEM_ERROR_INVALID_STATE;
-    }
-#endif
 
     udp_.setBuffer(kUdpRxBufferSize);
     if (!udp_.begin(kUdpLocalPort)) {
@@ -638,16 +665,42 @@ void Satellite::receiveData(void) {
 // the Device OS UDP poll.
 void Satellite::handleInboundDatagram(char* data, size_t len) {
 #if SECURE_UDP_ENABLED
-    // Verify + strip the secure frame before handing the inner
-    // payload to the protocol layer. A bad tag or replayed counter
-    // is dropped silently (spec §6.2, §7.2).
+    // Verify + strip the secure frame before handing the inner payload to the
+    // protocol layer. Every non-Ok status drops the datagram (spec §6.2, §7.2),
+    // but the modes are logged and counted separately: a storage fault after a
+    // valid tag needs different remediation than an attack or replay noise.
     const uint8_t* payload = nullptr;
     size_t payloadLen = 0;
-    if (secureUdp_.verifyDownlink((const uint8_t*)data, len, payload, payloadLen)) {
-        auto dataBuf = util::Buffer((char*)payload, payloadLen);
-        proto_.receive(dataBuf, 223);
-    } else {
-        Log.warn("Secure UDP downlink verify failed; dropping %u bytes", (unsigned)len);
+    const auto status = secureUdp_.verifyDownlink((const uint8_t*)data, len, payload, payloadLen);
+    switch (status) {
+        case secure_udp::Status::Ok: {
+            auto dataBuf = util::Buffer((char*)payload, payloadLen);
+            proto_.receive(dataBuf, 223);
+            break;
+        }
+        case secure_udp::Status::Malformed:
+            ++secureRxStats_.malformed;
+            Log.warn("Secure UDP downlink malformed; dropping %u bytes", (unsigned)len);
+            break;
+        case secure_udp::Status::Replay:
+            ++secureRxStats_.replay;
+            Log.warn("Secure UDP downlink replayed/stale; dropping %u bytes", (unsigned)len);
+            break;
+        case secure_udp::Status::PersistFailed:
+            ++secureRxStats_.persistFailed;
+            Log.error("Secure UDP downlink authenticated but replay floor persist failed; dropping %u bytes",
+                (unsigned)len);
+            break;
+        case secure_udp::Status::NotReady:
+            ++secureRxStats_.notReady;
+            Log.warn("Secure UDP downlink before session ready; dropping %u bytes", (unsigned)len);
+            break;
+        case secure_udp::Status::BadTag:
+        case secure_udp::Status::CounterExhausted:
+        default:
+            ++secureRxStats_.badTag;
+            Log.warn("Secure UDP downlink bad tag; dropping %u bytes", (unsigned)len);
+            break;
     }
 #else
     auto dataBuf = util::Buffer(data, len);
@@ -669,15 +722,34 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
 #if SECURE_UDP_ENABLED
     // Wrap the protocol payload as an authenticated uplink frame before the
     // existing hex-encode + QISENDEX. The secure layer is transparent to the
-    // CloudProtocol caller (spec §5–§7).
-    if (!secureUdp_.ready()) {
-        Log.error("Secure UDP not ready; dropping %u-byte uplink", (unsigned)len);
-        return SYSTEM_ERROR_INVALID_STATE;
+    // CloudProtocol caller (spec §5–§7). The scratch buffer is the wire cap:
+    // anything the protocol layer admits (cap − overhead) fits after wrapping.
+    uint8_t secureFrame[kMaxWireDatagramBytes];
+    size_t frameLen = 0;
+    const auto status = secureUdp_.protectUplink(buf, len, secureFrame, sizeof(secureFrame), frameLen);
+    switch (status) {
+        case secure_udp::Status::Ok:
+            break;
+        case secure_udp::Status::NotReady:
+            Log.error("Secure UDP not ready; dropping %u-byte uplink", (unsigned)len);
+            return SYSTEM_ERROR_INVALID_STATE;
+        case secure_udp::Status::CounterExhausted:
+            Log.error("Secure UDP uplink counter exhausted; dropping %u-byte uplink", (unsigned)len);
+            return SYSTEM_ERROR_OUT_OF_RANGE;
+        case secure_udp::Status::PersistFailed:
+            Log.error("Secure UDP counter persistence failed; dropping %u-byte uplink", (unsigned)len);
+            return SYSTEM_ERROR_FLASH_IO;
+        case secure_udp::Status::TooLarge:
+        default:
+            Log.error("Secure UDP frame too large (payload=%u bytes, cap=%u)",
+                (unsigned)len, (unsigned)sizeof(secureFrame));
+            return SYSTEM_ERROR_TOO_LARGE;
     }
-    uint8_t secureFrame[secure_udp::kUplinkOverheadBytes + 512];
-    const size_t frameLen = secureUdp_.protectUplink(buf, len, secureFrame, sizeof(secureFrame));
-    if (frameLen == 0) {
-        Log.error("Secure UDP protectUplink failed (payload=%u bytes)", (unsigned)len);
+    // Final wire-size gate: the protocol layer was sized to cap − overhead, so
+    // this only catches drift between the two limits.
+    if (frameLen > maxPayloadSize_) {
+        Log.error("Secure frame %u bytes exceeds on-wire cap %u",
+            (unsigned)frameLen, (unsigned)maxPayloadSize_);
         return SYSTEM_ERROR_TOO_LARGE;
     }
     buf = secureFrame;

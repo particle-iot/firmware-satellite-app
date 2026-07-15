@@ -51,15 +51,18 @@ public:
     bool ready() const { return ready_; }
 
     // Wraps an application payload as an authenticated uplink frame into `out`
-    // (KeyId ‖ CounterLow ‖ Payload ‖ Tag). Returns the frame length, or 0 on
-    // counter exhaustion, persist failure, or outCap too small.
-    size_t protectUplink(const uint8_t* payload, size_t payloadLen,
-            uint8_t* out, size_t outCap);
+    // (KeyId ‖ CounterLow ‖ Payload ‖ Tag). On Ok, frameLenOut holds the frame
+    // length. Failure modes: NotReady, CounterExhausted, PersistFailed (the
+    // counter is not consumed), TooLarge (frame does not fit outCap).
+    Status protectUplink(const uint8_t* payload, size_t payloadLen,
+            uint8_t* out, size_t outCap, size_t& frameLenOut);
 
-    // Verifies a received downlink datagram and, on success, advances the replay
-    // floor. `payloadOut` points into `datagram`. Returns false (drop) on parse
-    // failure, bad tag, or replay/stale counter.
-    bool verifyDownlink(const uint8_t* datagram, size_t len,
+    // Verifies a received downlink datagram and, on Ok, advances the replay
+    // floor. `payloadOut` points into `datagram`. Any non-Ok status means drop:
+    // NotReady, Malformed, BadTag, CounterExhausted, Replay (stale/duplicate),
+    // or PersistFailed (authenticated, but the floor could not be persisted —
+    // an operational storage fault, not an attack).
+    Status verifyDownlink(const uint8_t* datagram, size_t len,
             const uint8_t*& payloadOut, size_t& payloadLenOut);
 
     const SecureUdpContext& context() const { return ctx_; }

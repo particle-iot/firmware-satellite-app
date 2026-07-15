@@ -71,7 +71,7 @@ All runtime behaviour is defined in a single top-level `env.json` file. Workbenc
 | `LTE_PUBLISH_INTERVAL_S` | uint | `60` | Seconds between publishes while on LTE-M. |
 | `NTN_PUBLISH_INTERVAL_S` | uint | `180` | Seconds between publishes while on NTN. Cannot be set below `30`. |
 | `VITALS_INTERVAL_S` | uint | `600` | Seconds between periodic device-vitals publishes. Vitals are always published once on (re)connect regardless of this value; `0` disables the periodic refresh (on-connect only). |
-| `NTN_MAX_PAYLOAD_SIZE` | uint | `256` | Max on-wire frame size (header + body) for outbound NTN publishes. |
+| `NTN_MAX_PAYLOAD_SIZE` | uint | `256` | Max on-wire datagram size for outbound NTN publishes, including the 9-byte Secure UDP overhead when enabled (the protocol frame gets the remainder). Clamped to the transport maximum of 256. |
 | `CELLULAR_DISCONNECTED_TIMEOUT_S` | uint | `600` | Seconds disconnected on LTE before switching to Satellite. There is no cellular "connected" timeout — if LTE is up, we stay. |
 | `SATELLITE_CONNECTED_TIMEOUT_S` | uint | `600` | Seconds connected on Satellite before switching back to test Cellular again. |
 | `SATELLITE_DISCONNECTED_TIMEOUT_S` | uint | `600` | Seconds disconnected on Satellite (including while still acquiring — SEARCH/LIMSRV before attach) before switching back to Cellular. NTN attach can take minutes, so don't set this too low or the device gives up before it ever connects. |

@@ -231,24 +231,24 @@ bool SecureUdpContext::init(const uint8_t devicePriv32[32], const uint8_t cloudP
     return true;
 }
 
-bool SecureUdpContext::verifyDownlink(const uint8_t* datagram, size_t len, uint64_t windowFloor,
+Status SecureUdpContext::verifyDownlink(const uint8_t* datagram, size_t len, uint64_t windowFloor,
         uint64_t& counter48Out, const uint8_t*& payloadOut, size_t& payloadLenOut) const {
     ParsedDownlink parsed;
     if (!parseDownlink(datagram, len, parsed)) {
-        return false;
+        return Status::Malformed;
     }
     uint64_t counter48 = 0;
     if (!reconstructCounter(parsed.counterLow, windowFloor, counter48)) {
-        return false;
+        return Status::CounterExhausted;
     }
     if (!verifyTag(kDown_, keyId_, counter48, parsed.payload, parsed.payloadLen,
             parsed.tag, kTagBytes)) {
-        return false;
+        return Status::BadTag;
     }
     counter48Out = counter48;
     payloadOut = parsed.payload;
     payloadLenOut = parsed.payloadLen;
-    return true;
+    return Status::Ok;
 }
 
 size_t SecureUdpContext::protectUplink(uint64_t counter48, const uint8_t* payload,
@@ -283,34 +283,46 @@ bool StridedCounters::init(CounterStore& store, uint32_t stride) {
     return true;
 }
 
-bool StridedCounters::nextUplink(uint64_t& out) {
-    if (store_ == nullptr || uplinkNext_ > kCounter48Max) {
-        return false;
+Status StridedCounters::nextUplink(uint64_t& out) {
+    if (store_ == nullptr) {
+        return Status::NotReady;
     }
+    if (uplinkNext_ > kCounter48Max) {
+        return Status::CounterExhausted;
+    }
+    // Persist before committing the new watermark to RAM: a failed persist
+    // must leave state unchanged so the next call retries the write instead
+    // of handing out counters no persisted watermark covers.
     if (uplinkNext_ >= uplinkWatermark_) {
-        uplinkWatermark_ = uplinkNext_ + stride_;
-        if (!persist()) {
-            return false;
+        const uint64_t watermark = uplinkNext_ + stride_;
+        if (!store_->persistWatermarks(watermark, downlinkWatermark_)) {
+            return Status::PersistFailed;
         }
+        uplinkWatermark_ = watermark;
     }
     out = uplinkNext_++;
-    return true;
+    return Status::Ok;
 }
 
-bool StridedCounters::acceptDownlink(uint64_t counter48) {
-    if (store_ == nullptr || counter48 <= downlinkFloor_) {
-        return false;
+Status StridedCounters::acceptDownlink(uint64_t counter48) {
+    if (store_ == nullptr) {
+        return Status::NotReady;
+    }
+    if (counter48 <= downlinkFloor_) {
+        return Status::Replay;
+    }
+    // Same persist-then-commit rule: on failure the floor stays put and the
+    // caller drops the (undelivered) datagram, so the cloud's retransmission
+    // can be accepted once storage recovers.
+    if (counter48 >= downlinkWatermark_) {
+        const uint64_t watermark = counter48 + stride_;
+        if (!store_->persistWatermarks(uplinkWatermark_, watermark)) {
+            return Status::PersistFailed;
+        }
+        downlinkWatermark_ = watermark;
     }
     downlinkFloor_ = counter48;
-    if (downlinkFloor_ >= downlinkWatermark_) {
-        downlinkWatermark_ = downlinkFloor_ + stride_;
-        return persist();
-    }
-    return true;
-}
-
-bool StridedCounters::persist() {
-    return store_->persistWatermarks(uplinkWatermark_, downlinkWatermark_);
+    return Status::Ok;
 }
 
 } // namespace particle::secure_udp

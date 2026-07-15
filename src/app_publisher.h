@@ -43,9 +43,10 @@
 // app layer (the cloud enforces its own limits).
 //
 // NTN size cap: enforced inside the satellite library (MessageChannel checks
-// header + body against the configured maxPayloadSize and returns
-// Error::TOO_LARGE). The publisher just maps that return code to
-// stats_.oversized so the app surfaces oversized failures consistently.
+// header + body against the on-wire cap minus the Secure UDP frame overhead
+// and returns Error::TOO_LARGE). The publisher maps that return code to
+// stats_.oversized, and the secure layer's distinct failures (FLASH_IO,
+// OUT_OF_RANGE) to their own counters, so remediation signals stay separate.
 //
 // Success counters reflect the synchronous return from the underlying stack:
 // for NTN, that is "AT command accepted by the modem", NOT cloud delivery.
@@ -61,6 +62,10 @@ public:
         uint32_t oversized   = 0; // library returned Error::TOO_LARGE
         uint32_t rateLimited = 0; // bucket gap not yet elapsed
         uint32_t unknownEvent = 0; // name not in kEvents (used kDefaultNtnEventCode on NTN)
+        // Secure-UDP failures, split from ntnFail: a flash fault or an
+        // exhausted counter needs different remediation than a radio problem.
+        uint32_t persistFailed = 0;    // counter watermark write failed (FLASH_IO)
+        uint32_t counterExhausted = 0; // 48-bit uplink counter space used up (OUT_OF_RANGE)
     };
 
     AppPublisher(particle::Satellite& sat, particle::ModemManager& modem);

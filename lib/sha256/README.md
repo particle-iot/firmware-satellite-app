@@ -9,4 +9,4 @@ The sources are kept byte-identical and live under `src/bcon/` so they are
 included as `"bcon/sha256.h"`. The `bcon/` qualifier is required: Device OS ships
 its own `services/inc/sha256.h` earlier on the include path, so a bare
 `#include "sha256.h"` from outside this directory would resolve to the wrong
-header. `lib/secure-udp/src/crypto_port.cpp` includes it path-qualified.
+header. `lib/secure-udp/src/secure_udp.cpp` includes it path-qualified.

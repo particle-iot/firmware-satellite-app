@@ -170,6 +170,24 @@ public:
         return servingCell_;
     };
 
+#if SECURE_UDP_ENABLED
+    // Downlink secure-verification failures, split by mode: an attack signal
+    // (badTag), normal retransmission noise (replay), and an operational
+    // storage fault (persistFailed) need different remediation, so they must
+    // not share one counter.
+    struct SecureRxStats {
+        uint32_t malformed = 0;      // too short to parse
+        uint32_t badTag = 0;         // authentication failed
+        uint32_t replay = 0;         // stale / duplicate counter
+        uint32_t persistFailed = 0;  // authenticated, replay floor not persisted
+        uint32_t notReady = 0;       // datagram before session init
+    };
+
+    const SecureRxStats& secureRxStats() const {
+        return secureRxStats_;
+    }
+#endif
+
 private:
 
     bool begun_; // true if begin() previously called
@@ -218,6 +236,7 @@ private:
     // boundary. Counter watermarks persist to a flash file (stride rule, §6.2).
     secure_udp::FlashCounterStore secureUdpStore_{"/secure_udp.ctr"};
     secure_udp::SecureUdpSession secureUdp_;
+    SecureRxStats secureRxStats_;
 #endif
 
     char publishBuffer[1024] = {};

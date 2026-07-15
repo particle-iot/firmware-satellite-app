@@ -126,6 +126,18 @@ int AppPublisher::publishConstrained(const char* name, uint8_t code,
             via, name, (unsigned)code);
         return r;
     }
+    if (r == SYSTEM_ERROR_FLASH_IO) {
+        ++stats_.persistFailed;
+        pubLog.error("%s publish '%s' code=%u dropped: secure counter persistence failed",
+            via, name, (unsigned)code);
+        return r;
+    }
+    if (r == SYSTEM_ERROR_OUT_OF_RANGE) {
+        ++stats_.counterExhausted;
+        pubLog.error("%s publish '%s' code=%u dropped: secure uplink counter exhausted",
+            via, name, (unsigned)code);
+        return r;
+    }
     ++stats_.ntnFail;
     pubLog.warn("%s publish '%s' code=%u failed: %d (#%lu)",
         via, name, (unsigned)code, r, (unsigned long)stats_.ntnFail);
@@ -133,7 +145,7 @@ int AppPublisher::publishConstrained(const char* name, uint8_t code,
 }
 
 void AppPublisher::logStats() const {
-    pubLog.info("stats: lte=%lu/%lu ntn=%lu/%lu drop=%lu over=%lu rl=%lu unk=%lu",
+    pubLog.info("stats: lte=%lu/%lu ntn=%lu/%lu drop=%lu over=%lu rl=%lu unk=%lu pfail=%lu cex=%lu",
         (unsigned long)stats_.lteOk,
         (unsigned long)(stats_.lteOk + stats_.lteFail),
         (unsigned long)stats_.ntnOk,
@@ -141,5 +153,7 @@ void AppPublisher::logStats() const {
         (unsigned long)stats_.dropped,
         (unsigned long)stats_.oversized,
         (unsigned long)stats_.rateLimited,
-        (unsigned long)stats_.unknownEvent);
+        (unsigned long)stats_.unknownEvent,
+        (unsigned long)stats_.persistFailed,
+        (unsigned long)stats_.counterExhausted);
 }

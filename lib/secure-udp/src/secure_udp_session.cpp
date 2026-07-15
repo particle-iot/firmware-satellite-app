@@ -213,27 +213,33 @@ bool SecureUdpSession::init(CounterStore& store, uint32_t stride) {
     return true;
 }
 
-size_t SecureUdpSession::protectUplink(const uint8_t* payload, size_t payloadLen,
-        uint8_t* out, size_t outCap) {
+Status SecureUdpSession::protectUplink(const uint8_t* payload, size_t payloadLen,
+        uint8_t* out, size_t outCap, size_t& frameLenOut) {
+    frameLenOut = 0;
     if (!ready_) {
-        return 0;
+        return Status::NotReady;
     }
     uint64_t counter48 = 0;
-    if (!counters_.nextUplink(counter48)) {
-        return 0;
+    const Status s = counters_.nextUplink(counter48);
+    if (s != Status::Ok) {
+        return s;
     }
-    return ctx_.protectUplink(counter48, payload, payloadLen, out, outCap);
+    // The counter is in range by construction, so 0 here can only mean the
+    // frame does not fit outCap.
+    frameLenOut = ctx_.protectUplink(counter48, payload, payloadLen, out, outCap);
+    return frameLenOut > 0 ? Status::Ok : Status::TooLarge;
 }
 
-bool SecureUdpSession::verifyDownlink(const uint8_t* datagram, size_t len,
+Status SecureUdpSession::verifyDownlink(const uint8_t* datagram, size_t len,
         const uint8_t*& payloadOut, size_t& payloadLenOut) {
     if (!ready_) {
-        return false;
+        return Status::NotReady;
     }
     uint64_t counter48 = 0;
-    if (!ctx_.verifyDownlink(datagram, len, counters_.downlinkFloor(), counter48,
-            payloadOut, payloadLenOut)) {
-        return false;
+    const Status s = ctx_.verifyDownlink(datagram, len, counters_.downlinkFloor(),
+            counter48, payloadOut, payloadLenOut);
+    if (s != Status::Ok) {
+        return s;
     }
     // Advance the replay floor (and stride-persist when crossing the watermark).
     return counters_.acceptDownlink(counter48);
