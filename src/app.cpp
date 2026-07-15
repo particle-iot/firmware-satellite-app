@@ -129,6 +129,13 @@ bool satelliteShouldSwitchToCellular() {
         }
         return false;
     }
+    // Satellite can bounce between connected and disconnected, effectively resetting those timeouts.
+    // Here we will only allow Satellite radio to be used for a total of the connected + disconnected timeouts.
+    if (radioTime && (millis() - radioTime > (g_cfg.satelliteConnectedTimeoutS + g_cfg.satelliteDisconnectedTimeoutS) * 1000UL)) {
+        Log.info("Satellite timeout: Time on satellite expired after %lus on radio; switching to Cellular",
+            (unsigned long)(g_cfg.satelliteConnectedTimeoutS + g_cfg.satelliteDisconnectedTimeoutS));
+        return true;
+    }
     // Apply the timeout for the state we are actually in, measured from the last
     // connect/disconnect flip: switch after satelliteConnectedTimeoutS connected
     // (periodically retry LTE) or satelliteDisconnectedTimeoutS disconnected.
@@ -481,7 +488,16 @@ void loop()
         case AppState::CellularConnect:
         {
             if (onEntry()) {
+                logStatusLine(true /* forced */);
                 Log.info("CELLULAR CONNECT ---------------------");
+                // Satellite disconnects cellular manually, so it is
+                // important to turn interfaces back on and connect them.
+                if (Cellular.isOff()) {
+                    Cellular.on();
+                    waitFor(Cellular.isOn, 120000);
+                }
+                Cellular.connect();
+                // No waitFor(Cellular.ready, ) so logStatusLine() can run
                 Particle.connect();
             }
             if (cellularShouldSwitchToSatellite()) {
@@ -503,6 +519,8 @@ void loop()
             }
             if (Particle.connected()) {
                 runPublishTick();
+            } else {
+                transitionTo(AppState::CellularConnect);
             }
             break;
         }

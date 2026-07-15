@@ -72,11 +72,20 @@ struct AppConfig {
     //   cellularDisconnectedTimeoutS : time disconnected on LTE before
     //       switching to Satellite. (There is no cellular "connected" timeout
     //       - if LTE is connected there is no reason to switch.)
-    //   satelliteConnectedTimeoutS   : time connected on Satellite before
-    //       switching back to test Cellular again.
-    //   satelliteDisconnectedTimeoutS: time disconnected on Satellite before
-    //       switching back to Cellular. Satellite can take a while to connect
+    //   satelliteConnectedTimeoutS   : time connected on Satellite contiguously
+    //       before switching back to test Cellular again.
+    //   satelliteDisconnectedTimeoutS: time disconnected on Satellite contiguously
+    //       before switching back to Cellular. Satellite can take a while to connect
     //       - don't set this too low.
+    //   satelliteConnectedTimeoutS + satelliteDisconnectedTimeoutS : absolute max
+    //       time Satellite radio may be in operation before system will
+    //       automatically switch back to Cellular
+    //
+    // --- For quick debug testing -----------
+    //       Set all 3 to 2 minutes each, and disconnect the
+    //       antenna to simulate a cellular outage. Reconnect
+    //       the antenna after the switch to Satellite.
+    // ---------------------------------------
     uint32_t cellularDisconnectedTimeoutS;
     uint32_t satelliteConnectedTimeoutS;
     uint32_t satelliteDisconnectedTimeoutS;
