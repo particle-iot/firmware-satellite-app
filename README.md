@@ -63,7 +63,7 @@ All runtime behaviour is defined in a single top-level `env.json` file. Workbenc
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `INITIAL_ONLINE_TIMEOUT_S` | uint | `0` | If `> 0`, connect to the Particle cloud once at boot. Stays online for this many seconds, then disconnect and proceed to the normal startup flow. Useful to ensure the cloud can update device state and environment variables. Recommended: 60 seconds on first setup, and can be set to 0 when doing NTN tests.
+| `INITIAL_ONLINE_TIMEOUT_S` | uint | `0` | If `> 0`, connect to the Particle cloud once at boot. Stays online for this many seconds, then disconnect and proceed to the normal startup flow. Useful to ensure the cloud can update device state and environment variables. Can be 0 when if setting PARTICLE_LOCATION_FIXED directly, or when using setup.particle.io.
 | `FEATURE_LTE_ENABLED` | bool | `false` | Allow LTE-M as a connectivity stack. |
 | `FEATURE_NTN_ENABLED` | bool | `true` | Allow Satellite NTN as a connectivity stack. At least one of the two `FEATURE_*_ENABLED` flags must be true; LTE will be enabled if both are false. |
 | `START_ON_CELLULAR` | bool | `false` | Which radio the device boots on. `true` = LTE-M; `false` = NTN (useful for NTN-first demos). |
