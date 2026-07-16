@@ -483,6 +483,7 @@ void loop()
                 Log.warn("Disconnecting initial cloud connection");
                 Particle.disconnect();
                 waitFor(Particle.disconnected, 60000);
+                Cellular.disconnect();
                 transitionTo(AppState::Start);
             }
             break;
