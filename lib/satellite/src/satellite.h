@@ -145,6 +145,7 @@ private:
     bool begun_; // true if begin() previously called
 
     uint8_t registered_ = 0;
+    volatile uint8_t ntnInit_ = 0;
     volatile uint8_t ntnConnected_ = 0;
     volatile uint8_t nwConnected_ = NW_CONNECTED_INIT;
     volatile uint8_t nwConnectionDesired_ = NW_STATE_IDLE;
