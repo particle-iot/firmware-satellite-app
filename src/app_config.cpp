@@ -86,6 +86,7 @@ bool applyFixedLocationEnv() {
 AppConfig g_cfg = {
     /* lteEnabled                     */ false,
     /* ntnEnabled                     */ true,
+    /* initialOnlineTimeoutS          */ 0,
     /* startOnCellular                */ false,
     /* ltePublishIntervalS            */ 60,
     /* ntnPublishIntervalS            */ 3 * 60,
@@ -110,6 +111,7 @@ void loadAppConfig() {
     // Source every setting from its environment variable (env.json). Each helper
     // leaves the compiled default in place when the variable is absent or
     // invalid, so the device always boots with a usable configuration.
+    applyU32Env      ("INITIAL_ONLINE_TIMEOUT_S",           g_cfg.initialOnlineTimeoutS);
     applyBoolEnv     ("FEATURE_LTE_ENABLED",                g_cfg.lteEnabled);
     applyBoolEnv     ("FEATURE_NTN_ENABLED",                g_cfg.ntnEnabled);
     applyBoolEnv     ("START_ON_CELLULAR",                  g_cfg.startOnCellular);
@@ -154,10 +156,11 @@ void loadAppConfig() {
     }
 
     cfgLog.info("App config:");
-    cfgLog.info("  lteEnabled=%s ntnEnabled=%s startOnCellular=%s",
+    cfgLog.info("  lteEnabled=%s ntnEnabled=%s startOnCellular=%s initialOnlineTimeoutS=%lus",
         g_cfg.lteEnabled ? "true" : "false",
         g_cfg.ntnEnabled ? "true" : "false",
-        g_cfg.startOnCellular ? "true" : "false");
+        g_cfg.startOnCellular ? "true" : "false",
+        (unsigned long)g_cfg.initialOnlineTimeoutS);
     cfgLog.info("  publish: lte=%lus ntn=%lus vitals=%lus ntnMaxBytes=%lu",
         (unsigned long)g_cfg.ltePublishIntervalS,
         (unsigned long)g_cfg.ntnPublishIntervalS,

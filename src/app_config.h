@@ -43,6 +43,10 @@ struct AppConfig {
     bool ntnEnabled;
 
     // ---- Startup ----------------------------------------------------------
+    // If > 0, connect to the Particle cloud once at boot to give the opportunity
+    // for the cloud to update the device state and update environment variables.
+    uint32_t initialOnlineTimeoutS;
+
     // true  = boot on Cellular (LTE-M)
     // false = boot on Satellite (NTN). Useful for NTN-first demos.
     bool startOnCellular;
