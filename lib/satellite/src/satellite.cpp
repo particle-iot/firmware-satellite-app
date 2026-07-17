@@ -246,12 +246,21 @@ int Satellite::isRegistered() {
     return 0;
 }
 
+// AT+QENG="servingcell" <state> values:
+//   SEARCH  - no cell found yet, not on the network
+//   LIMSRV  - camped on a cell, not yet registered
+//   NOCONN  - camped AND registered, idle mode (no active bearer) - still attached
+//   CONNECT - camped AND registered, active call/data in progress
+static bool ntnRegistered(const char* state) {
+    return strcmp(state, "CONNECT") == 0 || strcmp(state, "NOCONN") == 0;
+}
+
 // Query and parse the serving-cell report into servingCell_.
 int Satellite::queryServingCell() {
     servingCell_ = NtnServingCellInfo{};
     Cellular.command(cbQENG, &servingCell_, 2000, "AT+QENG=\"servingcell\"");
 
-    if (nwConnected_ == NW_CONNECTED_SUCCESS && strcmp(servingCell_.state, "CONNECT") != 0) {
+    if (nwConnected_ == NW_CONNECTED_SUCCESS && !ntnRegistered(servingCell_.state)) {
         proto_.disconnect();
         ntnConnected_ = 0;
         nwConnected_ = NW_CONNECTED_INIT;
@@ -551,7 +560,7 @@ int Satellite::connectImpl() {
     if (ntnInit_) {
         queryServingCell();
 
-        if (strcmp(servingCell_.state, "CONNECT") == 0) {
+        if (ntnRegistered(servingCell_.state)) {
             ntnConnected_ = 1;
         } else {
             ntnConnected_ = 0;
