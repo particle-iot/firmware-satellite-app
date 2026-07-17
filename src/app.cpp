@@ -640,20 +640,17 @@ void loop()
         case AppState::SatelliteOnline:
         {
             satellite.process();
-            if (satellite.connected()) {
-                RGB.color(0,255,255);
-            } else {
-                RGB.color(0,255,0);
-                transitionTo(AppState::SatelliteConnect);
-                // no break, allow to fall through and check if we need to switch to cellular
-            }
 
             if (satelliteShouldSwitchToCellular()) {
                 transitionTo(AppState::SwitchToCellular);
                 break;
             }
             if (satellite.connected()) {
+                RGB.color(0,255,255);
                 runPublishTick();
+            } else {
+                RGB.color(0,255,0);
+                transitionTo(AppState::SatelliteConnect);
             }
             break;
         }
