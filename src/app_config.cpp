@@ -19,8 +19,6 @@
 
 namespace {
 
-static const int NTN_PUBLISH_INTERVAL_MIN_S = 30;
-
 Logger cfgLog("app.cfg");
 
 // Each setting is sourced from a build-time environment variable defined in the
@@ -88,6 +86,7 @@ AppConfig g_cfg = {
     /* ntnEnabled                     */ true,
     /* initialOnlineTimeoutS          */ 0,
     /* startOnCellular                */ false,
+    /* constrainedProtocolOnCellular  */ false,
     /* ltePublishIntervalS            */ 60,
     /* ntnPublishIntervalS            */ 3 * 60,
     /* vitalsIntervalS                */ 10 * 60,
@@ -115,6 +114,7 @@ void loadAppConfig() {
     applyBoolEnv     ("FEATURE_LTE_ENABLED",                g_cfg.lteEnabled);
     applyBoolEnv     ("FEATURE_NTN_ENABLED",                g_cfg.ntnEnabled);
     applyBoolEnv     ("START_ON_CELLULAR",                  g_cfg.startOnCellular);
+    applyBoolEnv     ("CONSTRAINED_PROTOCOL_ON_CELLULAR",   g_cfg.constrainedProtocolOnCellular);
     applyU32Env      ("LTE_PUBLISH_INTERVAL_S",             g_cfg.ltePublishIntervalS);
     applyU32Env      ("NTN_PUBLISH_INTERVAL_S",             g_cfg.ntnPublishIntervalS);
     applyU32Env      ("VITALS_INTERVAL_S",                  g_cfg.vitalsIntervalS);
@@ -156,10 +156,11 @@ void loadAppConfig() {
     }
 
     cfgLog.info("App config:");
-    cfgLog.info("  lteEnabled=%s ntnEnabled=%s startOnCellular=%s initialOnlineTimeoutS=%lus",
+    cfgLog.info("  lteEnabled=%s ntnEnabled=%s startOnCellular=%s constrainedProtoOnCell=%s initialOnlineTimeoutS=%lus",
         g_cfg.lteEnabled ? "true" : "false",
         g_cfg.ntnEnabled ? "true" : "false",
         g_cfg.startOnCellular ? "true" : "false",
+        g_cfg.constrainedProtocolOnCellular ? "true" : "false",
         (unsigned long)g_cfg.initialOnlineTimeoutS);
     cfgLog.info("  publish: lte=%lus ntn=%lus vitals=%lus ntnMaxBytes=%lu",
         (unsigned long)g_cfg.ltePublishIntervalS,

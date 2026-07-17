@@ -62,6 +62,17 @@ int AppPublisher::publish(const char* name, const particle::Variant& data) {
             pubLog.warn("publish '%s': LTE not connected, dropped", name);
             return SYSTEM_ERROR_INVALID_STATE;
         }
+        if (g_cfg.constrainedProtocolOnCellular) {
+            // Route through the constrained protocol instead of
+            // Particle.publish. No fallback: if the UDP transport isn't up,
+            // the publish is dropped and counted.
+            if (!sat_.cellularTransportActive()) {
+                ++stats_.dropped;
+                pubLog.warn("publish '%s': constrained-protocol transport not up, dropped", name);
+                return SYSTEM_ERROR_INVALID_STATE;
+            }
+            return publishConstrained(name, code, data, "CP-over-LTE");
+        }
         bool ok = Particle.publish(name, data);
         if (ok) {
             ++stats_.lteOk;
@@ -79,36 +90,7 @@ int AppPublisher::publish(const char* name, const particle::Variant& data) {
             pubLog.warn("publish '%s': NTN not connected, dropped", name);
             return SYSTEM_ERROR_INVALID_STATE;
         }
-
-        // Single NTN rate-limit bucket: every NTN event (including vitals)
-        // is gated by the same minimum gap.
-        const uint32_t now = millis();
-        const uint32_t gapMs = g_cfg.ntnPublishIntervalS * 1000UL;
-        if (!gapElapsed(ntnLastSendMs_, now, gapMs)) {
-            ++stats_.rateLimited;
-            pubLog.info("NTN publish '%s' rate-limited (%lums since last, gap %lums)",
-                name, (unsigned long)(now - ntnLastSendMs_), (unsigned long)gapMs);
-            return SYSTEM_ERROR_LIMIT_EXCEEDED;
-        }
-
-        int r = sat_.publish(code, data);
-        if (r == 0) {
-            ntnLastSendMs_ = now ? now : 1; // avoid the "never sent" sentinel
-            ++stats_.ntnOk;
-            pubLog.info("NTN publish '%s' code=%u AT-accepted (#%lu)",
-                name, (unsigned)code, (unsigned long)stats_.ntnOk);
-            return 0;
-        }
-        if (r == SYSTEM_ERROR_TOO_LARGE) {
-            ++stats_.oversized;
-            pubLog.error("NTN publish '%s' code=%u rejected as too large",
-                name, (unsigned)code);
-            return r;
-        }
-        ++stats_.ntnFail;
-        pubLog.warn("NTN publish '%s' code=%u failed: %d (#%lu)",
-            name, (unsigned)code, r, (unsigned long)stats_.ntnFail);
-        return r;
+        return publishConstrained(name, code, data, "NTN");
     }
 
     // Radio not yet selected.
@@ -117,8 +99,53 @@ int AppPublisher::publish(const char* name, const particle::Variant& data) {
     return SYSTEM_ERROR_INVALID_STATE;
 }
 
+int AppPublisher::publishConstrained(const char* name, uint8_t code,
+        const particle::Variant& data, const char* via) {
+    // Single rate-limit bucket: every constrained-protocol event (including
+    // vitals) is gated by the same minimum gap, regardless of transport.
+    const uint32_t now = millis();
+    const uint32_t gapMs = NTN_PUBLISH_INTERVAL_MIN_S * 1000UL;
+    if (!gapElapsed(ntnLastSendMs_, now, gapMs)) {
+        ++stats_.rateLimited;
+        pubLog.info("%s publish '%s' rate-limited (%lums since last, gap %lums)",
+            via, name, (unsigned long)(now - ntnLastSendMs_), (unsigned long)gapMs);
+        return SYSTEM_ERROR_LIMIT_EXCEEDED;
+    }
+
+    int r = sat_.publish(code, data);
+    if (r == 0) {
+        ntnLastSendMs_ = now ? now : 1; // avoid the "never sent" sentinel
+        ++stats_.ntnOk;
+        pubLog.info("%s publish '%s' code=%u accepted (#%lu)",
+            via, name, (unsigned)code, (unsigned long)stats_.ntnOk);
+        return 0;
+    }
+    if (r == SYSTEM_ERROR_TOO_LARGE) {
+        ++stats_.oversized;
+        pubLog.error("%s publish '%s' code=%u rejected as too large",
+            via, name, (unsigned)code);
+        return r;
+    }
+    if (r == SYSTEM_ERROR_FLASH_IO) {
+        ++stats_.persistFailed;
+        pubLog.error("%s publish '%s' code=%u dropped: secure counter persistence failed",
+            via, name, (unsigned)code);
+        return r;
+    }
+    if (r == SYSTEM_ERROR_OUT_OF_RANGE) {
+        ++stats_.counterExhausted;
+        pubLog.error("%s publish '%s' code=%u dropped: secure uplink counter exhausted",
+            via, name, (unsigned)code);
+        return r;
+    }
+    ++stats_.ntnFail;
+    pubLog.warn("%s publish '%s' code=%u failed: %d (#%lu)",
+        via, name, (unsigned)code, r, (unsigned long)stats_.ntnFail);
+    return r;
+}
+
 void AppPublisher::logStats() const {
-    pubLog.info("stats: lte=%lu/%lu ntn=%lu/%lu drop=%lu over=%lu rl=%lu unk=%lu",
+    pubLog.info("stats: lte=%lu/%lu ntn=%lu/%lu drop=%lu over=%lu rl=%lu unk=%lu pfail=%lu cex=%lu",
         (unsigned long)stats_.lteOk,
         (unsigned long)(stats_.lteOk + stats_.lteFail),
         (unsigned long)stats_.ntnOk,
@@ -126,5 +153,7 @@ void AppPublisher::logStats() const {
         (unsigned long)stats_.dropped,
         (unsigned long)stats_.oversized,
         (unsigned long)stats_.rateLimited,
-        (unsigned long)stats_.unknownEvent);
+        (unsigned long)stats_.unknownEvent,
+        (unsigned long)stats_.persistFailed,
+        (unsigned long)stats_.counterExhausted);
 }

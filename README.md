@@ -67,10 +67,11 @@ All runtime behaviour is defined in a single top-level `env.json` file. Workbenc
 | `FEATURE_LTE_ENABLED` | bool | `false` | Allow LTE-M as a connectivity stack. |
 | `FEATURE_NTN_ENABLED` | bool | `true` | Allow Satellite NTN as a connectivity stack. At least one of the two `FEATURE_*_ENABLED` flags must be true; LTE will be enabled if both are false. |
 | `START_ON_CELLULAR` | bool | `false` | Which radio the device boots on. `true` = LTE-M; `false` = NTN (useful for NTN-first demos). |
+| `CONSTRAINED_PROTOCOL_ON_CELLULAR` | bool | `false` | Testing aid. When `true`, publishes made while on the normal Device OS connection (LTE-M, or WiFi) are routed through the constrained protocol — the same CloudProtocol / secure-UDP datagram stack used over NTN, sent to the NTN ingress — instead of `Particle.publish`. Exercises the exact NTN wire protocol (framing, counters, tags, ACKs, queued downlinks) without waiting for a satellite attach. The Particle cloud session stays up (OTA/console keep working) and the NTN rate limit and payload cap still apply. No fallback: if the secure-UDP session can't initialize, publishes fail visibly in the publish stats. |
 | `LTE_PUBLISH_INTERVAL_S` | uint | `60` | Seconds between publishes while on LTE-M. |
 | `NTN_PUBLISH_INTERVAL_S` | uint | `180` | Seconds between publishes while on NTN. Cannot be set below `30`. |
 | `VITALS_INTERVAL_S` | uint | `600` | Seconds between periodic device-vitals publishes. Vitals are always published once on (re)connect regardless of this value; `0` disables the periodic refresh (on-connect only). |
-| `NTN_MAX_PAYLOAD_SIZE` | uint | `256` | Max on-wire frame size (header + body) for outbound NTN publishes. |
+| `NTN_MAX_PAYLOAD_SIZE` | uint | `256` | Max on-wire datagram size for outbound NTN publishes, including the 9-byte Secure UDP overhead when enabled (the protocol frame gets the remainder). Clamped to the transport maximum of 256. |
 | `CELLULAR_DISCONNECTED_TIMEOUT_S` | uint | `600` | Seconds disconnected on LTE before switching to Satellite. There is no cellular "connected" timeout — if LTE is up, we stay. |
 | `SATELLITE_CONNECTED_TIMEOUT_S` | uint | `600` | Seconds connected on Satellite before switching back to test Cellular again. |
 | `SATELLITE_DISCONNECTED_TIMEOUT_S` | uint | `600` | Seconds disconnected on Satellite (including while still acquiring — SEARCH/LIMSRV before attach) before switching back to Cellular. NTN attach can take minutes, so don't set this too low or the device gives up before it ever connects. |

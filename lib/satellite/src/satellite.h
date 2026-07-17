@@ -24,6 +24,16 @@
 
 #include <optional>
 
+// Secure UDP Phase 1 (CDS-UDP-v1) wraps the NTN UDP path. Set to 0 to fall back
+// to the legacy unauthenticated datagram + port for bring-up.
+#ifndef SECURE_UDP_ENABLED
+#define SECURE_UDP_ENABLED 1
+#endif
+
+#if SECURE_UDP_ENABLED
+#include "secure_udp_session.h"
+#endif
+
 const uint8_t NW_CONNECTED_INIT = 0;
 const uint8_t NW_CONNECTED_SUCCESS = 1;
 const uint8_t NW_CONNECTED_FAILED = 2;
@@ -132,6 +142,26 @@ public:
 
     int process(bool force = false);
 
+    // ---- Constrained protocol over the normal Device OS connection --------
+    // Runs the same CloudProtocol + secure-UDP stack over a Device OS UDP
+    // socket while cellular/WiFi is the active connection (Device OS owns the
+    // modem there, so the NTN AT-socket path is unavailable). Both transports
+    // share the one secure-UDP session, so the per-direction counter space
+    // never forks across radio switches.
+    //
+    // beginCellularTransport() is idempotent; call it only once the network is
+    // up (Particle.connected()). endCellularTransport() must run before the
+    // network drops (e.g. ahead of a switch to the satellite profile) and is a
+    // safe no-op if the transport never started. processCellularTransport()
+    // is the cellular analog of process(): drive it every loop while the
+    // transport is active to poll for downlinks and run protocol timers.
+    int beginCellularTransport();
+    void endCellularTransport();
+    int processCellularTransport();
+    bool cellularTransportActive() const {
+        return transportMode_ == TransportMode::DEVICEOS_UDP && udpStarted_;
+    }
+
     GnssPositioningInfo lastPositionInfo(void) {
         return lastPositionInfo_;
     };
@@ -139,6 +169,24 @@ public:
     NtnServingCellInfo servingCellInfo(void) {
         return servingCell_;
     };
+
+#if SECURE_UDP_ENABLED
+    // Downlink secure-verification failures, split by mode: an attack signal
+    // (badTag), normal retransmission noise (replay), and an operational
+    // storage fault (persistFailed) need different remediation, so they must
+    // not share one counter.
+    struct SecureRxStats {
+        uint32_t malformed = 0;      // too short to parse
+        uint32_t badTag = 0;         // authentication failed
+        uint32_t replay = 0;         // stale / duplicate counter
+        uint32_t persistFailed = 0;  // authenticated, replay floor not persisted
+        uint32_t notReady = 0;       // datagram before session init
+    };
+
+    const SecureRxStats& secureRxStats() const {
+        return secureRxStats_;
+    }
+#endif
 
 private:
 
@@ -170,6 +218,27 @@ private:
     size_t maxPayloadSize_ = 0;
     constrained::CloudProtocol proto_;
 
+    // Which byte transport tx()/receive uses under the constrained protocol.
+    //   NTN_AT_SOCKET: app-owned modem, hex encode + AT+QISENDEX / AT+QIRD.
+    //   DEVICEOS_UDP : Device OS UDP socket over the normal connection.
+    enum class TransportMode {
+        NTN_AT_SOCKET,
+        DEVICEOS_UDP,
+    };
+
+    TransportMode transportMode_ = TransportMode::NTN_AT_SOCKET;
+    UDP udp_;
+    bool udpStarted_ = false;
+    uint32_t lastUdpReceiveCheck_ = 0;
+
+#if SECURE_UDP_ENABLED
+    // Secure UDP session: wraps uplinks and verifies downlinks at the modem
+    // boundary. Counter watermarks persist to a flash file (stride rule, §6.2).
+    secure_udp::FlashCounterStore secureUdpStore_{"/secure_udp.ctr"};
+    secure_udp::SecureUdpSession secureUdp_;
+    SecureRxStats secureRxStats_;
+#endif
+
     char publishBuffer[1024] = {};
 
     static int cbCFUN(int type, const char* buf, int len, int* cfun);
@@ -191,8 +260,10 @@ private:
     void updateRegistration(bool force = false);
 
     void receiveData(void);
+    void handleInboundDatagram(char* data, size_t len);
     int processErrors(void);
     int connectImpl(void);
+    int initProtocolStack(void);
 };
 
 } // particle

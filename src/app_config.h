@@ -33,6 +33,7 @@
 //   milliseconds (e.g. `g_cfg.fooS * 1000UL`).
 // =============================================================================
 
+static constexpr int NTN_PUBLISH_INTERVAL_MIN_S = 30;
 
 struct AppConfig {
     // ---- Feature toggles --------------------------------------------------
@@ -51,6 +52,17 @@ struct AppConfig {
     // false = boot on Satellite (NTN). Useful for NTN-first demos.
     bool startOnCellular;
 
+    // ---- Constrained protocol over the normal connection (testing aid) ----
+    // When true, app publishes made while on the normal Device OS connection
+    // (cellular, or WiFi) are routed through the constrained protocol - the
+    // same CloudProtocol / secure-UDP datagram stack used over NTN, sent to
+    // the NTN ingress - INSTEAD of Particle.publish. The Particle cloud
+    // session stays up (OTA/console keep working) and the NTN rate limit
+    // still applies, so the wire behavior matches a satellite-attached
+    // device without waiting for an NTN attach. There is no fallback: if the
+    // secure-UDP session cannot initialize, publishes fail visibly in stats.
+    bool constrainedProtocolOnCellular;
+
     // ---- Publish timing ---------------------------------------------------
     // Per-stack publish cadence in seconds. Do NOT set the satellite interval
     // below 10 s.
@@ -64,10 +76,12 @@ struct AppConfig {
     uint32_t vitalsIntervalS;
 
     // ---- NTN payload cap --------------------------------------------------
-    // Max on-wire frame size (header + body) for outbound NTN publishes. The
-    // satellite library will reject frames larger than this with
-    // Error::TOO_LARGE before any AT traffic. Matches the modem's AT-command
-    // body limit (256 raw bytes = 512 hex chars on the AT line).
+    // Max ON-WIRE datagram size for outbound NTN publishes, including the
+    // Secure UDP frame overhead (9 bytes of KeyId/CounterLow/Tag) when enabled
+    // — the protocol frame (header + body) gets the remainder. The satellite
+    // library rejects larger frames with Error::TOO_LARGE before any AT
+    // traffic, and clamps out-of-range values to the transport maximum of 256
+    // (the modem's AT-command body limit: 256 raw bytes = 512 hex chars).
     uint32_t ntnMaxPayloadSize;
 
     // ---- Radio switching timeouts ----------------------------------------
