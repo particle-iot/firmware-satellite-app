@@ -506,6 +506,12 @@ int Satellite::processCellularTransport() {
 int Satellite::connect() {
     nwConnectionDesired_ = NW_STATE_CONNECT;
     nwConnected_ = NW_CONNECTED_INIT;
+
+    int cfunVal = -1;
+    if ( RESP_OK == Cellular.command(cbCFUN, &cfunVal, 180000, "AT+CFUN?") && cfunVal != 1 ) {
+        Cellular.command(180000, "AT+CFUN=1");
+    }
+
     return 0;
 }
 
@@ -591,6 +597,8 @@ int Satellite::disconnect() {
     Cellular.command(2000, "AT+QICLOSE=%d", UDP_CONNECT_ID);
     Cellular.command(2000, "AT+QIDEACT=1");
 #endif
+
+    Cellular.command(2000, "AT+CFUN=0"); // required to properly end NTN data session
 
     return 0;
 }
