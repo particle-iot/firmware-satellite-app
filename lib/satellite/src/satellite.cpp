@@ -264,6 +264,8 @@ int Satellite::queryServingCell() {
         proto_.disconnect();
         ntnConnected_ = 0;
         nwConnected_ = NW_CONNECTED_INIT;
+        ntnInit_ = 0; // in case we de-registered, make sure NTN is re-initialized
+        // do not change state of nwConnectionDesired_, connection should come back on its own
     }
 
     return servingCell_.state[0] ? 0 : -1;
@@ -606,7 +608,7 @@ void Satellite::updateRegistration(bool force) {
     }
     lastRegistrationCheck_ = millis();
 
-    int r = isRegistered() && ntnRegistered(servingCell_.state);
+    int r = isRegistered();
 
     if (r) {
         noRegistrationTimer_ = 0;
