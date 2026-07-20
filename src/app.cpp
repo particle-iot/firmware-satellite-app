@@ -611,6 +611,7 @@ void loop()
             }
 
             satellite.process();
+            updateConnectionTimers();
             transitionTo(AppState::SatelliteConnect);
             break;
         }
@@ -625,6 +626,7 @@ void loop()
             }
 
             satellite.process();
+            updateConnectionTimers();
 
             if (satelliteShouldSwitchToCellular()) {
                 transitionTo(AppState::SwitchToCellular);
@@ -640,11 +642,13 @@ void loop()
         case AppState::SatelliteOnline:
         {
             satellite.process();
+            updateConnectionTimers();
 
             if (satelliteShouldSwitchToCellular()) {
                 transitionTo(AppState::SwitchToCellular);
                 break;
             }
+
             if (satellite.connected()) {
                 RGB.color(0,255,255);
                 runPublishTick();
@@ -688,6 +692,7 @@ void loop()
             // NOTE: Very important to disconnect Satellite before switching to Cellular
             satellite.disconnect();
             satellite.process();
+            updateConnectionTimers();
             RGB.control(false);
 
             Log.info("RADIO CELLULAR --------------------");
