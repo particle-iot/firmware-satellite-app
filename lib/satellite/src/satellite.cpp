@@ -575,6 +575,7 @@ int Satellite::connectImpl() {
         int r = proto_.connect();
         if (r < 0) {
             Log.error("CloudProtocol::connect() failed: %d", r);
+            Log.warn("Ensure Satellite::begin() is called before Satellite::connect()");
             nwConnected_ = NW_CONNECTED_FAILED;
             errorCount_++;
             return r;
@@ -616,7 +617,7 @@ void Satellite::updateRegistration(bool force) {
     }
     lastRegistrationCheck_ = millis();
 
-    int r = isRegistered();
+    int r = isRegistered() && (!servingCell_.state[0] || ntnRegistered(servingCell_.state));
 
     if (r) {
         noRegistrationTimer_ = 0;
@@ -633,8 +634,8 @@ void Satellite::updateRegistration(bool force) {
         } else if (millis() - noRegistrationTimer_ > SATELLITE_NCP_NO_REGISTRATION_MS) {
             // Prolonged no-registration: kick the radio.
             Log.info("No registration for %d minutes, toggling CFUN.", SATELLITE_NCP_NO_REGISTRATION_MS / 60000);
-            Cellular.command(20000, "AT+CFUN=0");
-            Cellular.command(20000, "AT+CFUN=1");
+            Cellular.command(180000, "AT+CFUN=0");
+            Cellular.command(180000, "AT+CFUN=1");
             noRegistrationTimer_ = millis();
         }
     }
