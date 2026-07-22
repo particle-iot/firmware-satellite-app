@@ -33,25 +33,28 @@ LOG_SOURCE_CATEGORY("ncp.client");
 #include <cloud/cloud_new.pb.h>
 
 #define USE_NON_IP 0
-// #define UDP_ENDPOINT_NAME "publish-receiver-udp.particle.io"
-#define UDP_ENDPOINT_NAME "52.5.13.97"
-#if SECURE_UDP_ENABLED
-// Phase 1 secure suite listens on its own UDP port (port-based versioning, §9);
-// the server default is 9932. TODO: confirm the deployed secure ingress
-// host:port before flashing to a real device.
-#define UDP_PORT 9932
-#else
-#define UDP_PORT 40000
-#endif
 #define UDP_CONNECT_ID 0
 
-// Device OS UDP transport (constrained protocol over the normal connection).
-// kUdpEndpointIp must match UDP_ENDPOINT_NAME - the AT path takes the host as
-// a string, the Device OS UDP API takes an IPAddress. The fixed local port
-// keeps the device's NAT mapping stable so cloud downlinks (sent to the
-// source addr:port of the last verified uplink) stay routable between polls.
-static const IPAddress kUdpEndpointIp(52, 5, 13, 97);
-static const uint16_t kUdpLocalPort = 40223;
+// Single source of truth for the UDP endpoint, shared by BOTH transports: the
+// Device OS UDP API takes it as an IPAddress, and the AT path (QIOPEN) formats
+// its host argument from the same octets in place - so the two can never drift
+// apart. Numeric IPs only; a DNS hostname endpoint would need its own
+// resolution step first. kUdpPort is the port the server listens on, paired
+// with its IP - switch both by swapping one comment block. (Phase 1 secure
+// ingress uses its own port, 9932, for port-based versioning, spec §9;
+// TODO: confirm the deployed secure ingress host:port.)
+// static const IPAddress kUdpEndpointIp(13, 219, 177, 65); // debug echo server "publish-receiver-udp.particle.io"
+// static const uint16_t kUdpPort = 40000;                  // debug echo server
+static const IPAddress kUdpEndpointIp(52, 5, 13, 97);       // secure ingress
+static const uint16_t kUdpPort = 9932;                      // secure ingress
+
+// The Device OS UDP socket also binds kUdpPort as its device-side source port
+// (src and dst ports are independent namespaces, so this is safe). A fixed
+// local port keeps the device's NAT mapping stable so cloud downlinks (sent to
+// the source addr:port of the last verified uplink) stay routable between
+// polls, and reusing kUdpPort means it tracks the endpoint block above
+// automatically. The NTN AT path does not bind it: QIOPEN without a local port
+// lets the modem pick an ephemeral one.
 static const size_t kUdpRxBufferSize = 320; // matches the NTN path's rxData[320]
 
 // Canonical on-wire datagram cap for outbound frames on both transports: the
@@ -452,16 +455,18 @@ int Satellite::beginCellularTransport() {
     }
 
     udp_.setBuffer(kUdpRxBufferSize);
-    if (!udp_.begin(kUdpLocalPort)) {
-        Log.error("UDP begin on port %u failed", (unsigned)kUdpLocalPort);
+    if (!udp_.begin(kUdpPort)) {
+        Log.error("UDP begin on port %u failed", (unsigned)kUdpPort);
         return SYSTEM_ERROR_NETWORK;
     }
     transportMode_ = TransportMode::DEVICEOS_UDP;
     udpStarted_ = true;
     lastUdpReceiveCheck_ = 0;
     proto_.connect();
-    Log.info("Constrained protocol over Device OS UDP started (dst %s:%d, local port %u)",
-        UDP_ENDPOINT_NAME, UDP_PORT, (unsigned)kUdpLocalPort);
+    Log.info("Constrained protocol over Device OS UDP started (dst %u.%u.%u.%u:%u, local port %u)",
+        (unsigned)kUdpEndpointIp[0], (unsigned)kUdpEndpointIp[1],
+        (unsigned)kUdpEndpointIp[2], (unsigned)kUdpEndpointIp[3],
+        (unsigned)kUdpPort, (unsigned)kUdpPort);
     return 0;
 }
 
@@ -550,7 +555,10 @@ int Satellite::connectImpl() {
         r = Cellular.command(150 * 1000, "AT+QIACT=1");
         Cellular.command(2000, "AT+QIACT?");
 
-        r = Cellular.command(150 * 1000, "AT+QIOPEN=1,%d,\"UDP\",\"%s\",%d", UDP_CONNECT_ID, UDP_ENDPOINT_NAME, UDP_PORT);
+        r = Cellular.command(150 * 1000, "AT+QIOPEN=1,%d,\"UDP\",\"%u.%u.%u.%u\",%u", UDP_CONNECT_ID,
+                (unsigned)kUdpEndpointIp[0], (unsigned)kUdpEndpointIp[1],
+                (unsigned)kUdpEndpointIp[2], (unsigned)kUdpEndpointIp[3],
+                (unsigned)kUdpPort);
 
         if (r == RESP_OK) {
             ntnInit_ = 1;
@@ -792,7 +800,7 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
         // NTN modem (CFUN) recovery in processErrors(), and a UDP failure on
         // the normal connection must not queue a modem reset for the next
         // NTN session.
-        int sent = udp_.sendPacket(buf, len, kUdpEndpointIp, UDP_PORT);
+        int sent = udp_.sendPacket(buf, len, kUdpEndpointIp, kUdpPort);
         if (sent < (int)len) {
             Log.error("UDP sendPacket failed: %d (%u bytes)", sent, (unsigned)len);
             return -1;
