@@ -593,6 +593,8 @@ int Satellite::disconnect() {
     nwConnected_ = NW_CONNECTED_INIT;
     ntnConnected_ = 0;
     ntnInit_ = 0;
+    registrationUpdateMs_ = SATELLITE_NCP_REGISTRATION_UPDATE_FAST_MS;
+    registered_ = 0;
 
 #if !USE_NON_IP
     Cellular.command(2000, "AT+QICLOSE=%d", UDP_CONNECT_ID);
