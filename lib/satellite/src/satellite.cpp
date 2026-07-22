@@ -683,6 +683,15 @@ void Satellite::receiveData(void) {
 // the Device OS UDP poll.
 void Satellite::handleInboundDatagram(char* data, size_t len) {
 #if SECURE_UDP_ENABLED
+    // Log the raw encrypted frame in the same hex format as tx(), so inbound
+    // datagrams (echoes, dupes) can be matched to uplinks by frame counter.
+    {
+        char hexBuf[kUdpRxBufferSize * 2 + 1] = {};
+        const size_t dumpLen = (len < kUdpRxBufferSize) ? len : kUdpRxBufferSize;
+        auto hexLength = toHex(data, dumpLen, hexBuf, sizeof(hexBuf));
+        Log.info("RX %u->%u bytes", (unsigned)len, (unsigned)hexLength);
+        Log.trace("%s", hexBuf);
+    }
     // Verify + strip the secure frame before handing the inner payload to the
     // protocol layer. Every non-Ok status drops the datagram (spec §6.2, §7.2),
     // but the modes are logged and counted separately: a storage fault after a
@@ -759,8 +768,11 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
             return SYSTEM_ERROR_FLASH_IO;
         case secure_udp::Status::TooLarge:
         default:
-            Log.error("Secure UDP frame too large (payload=%u bytes, cap=%u)",
-                (unsigned)len, (unsigned)sizeof(secureFrame));
+            Log.error("Secure UDP payload too large (payload=%u, max=%u; wire cap %u minus %u overhead)",
+                (unsigned)len,
+                (unsigned)(sizeof(secureFrame) - secure_udp::kUplinkOverheadBytes),
+                (unsigned)sizeof(secureFrame),
+                (unsigned)secure_udp::kUplinkOverheadBytes);
             return SYSTEM_ERROR_TOO_LARGE;
     }
     // Final wire-size gate: the protocol layer was sized to cap − overhead, so
