@@ -82,6 +82,8 @@ All runtime behaviour is defined in a single top-level `env.json` file. Workbenc
 | `USE_ONBOARD_GNSS_FOR_LOCATION` | bool | `false` | Where the NTN location fix comes from. `false` = use the `PARTICLE_LOCATION_FIXED` coords below; never query the GNSS engine (no-antenna devices). `true` = use the onboard GNSS engine for up to `ONBOARD_GNSS_FIX_TIMEOUT_S`, then fall back to those coords. |
 | `ONBOARD_GNSS_FIX_TIMEOUT_S` | uint | `300` | Maximum seconds to wait for a GNSS fix when `USE_ONBOARD_GNSS_FOR_LOCATION` is `true` before giving up and using the fixed coords. Unused when it is `false`. |
 | `PARTICLE_LOCATION_FIXED` | string | `"44.92653,-93.39767,283"` | Fixed location as `"<latitude>,<longitude>,<altitude>"` in decimal degrees / meters. Used directly when GNSS is disabled, and as the fallback when GNSS is enabled. Warned about if missing/invalid while `USE_ONBOARD_GNSS_FOR_LOCATION` is `false`. |
+| `PARTICLE_WIFI_ENABLE` | string | `false` | Disables Wi-Fi operation for sole focus on NTN and Cellular for this blueprint. |
+| `PARTICLE_BLE_ENABLE` | string | `false` | Disables BLE operation for sole focus on NTN and Cellular for this blueprint. |
 
 ### Example Configurations
 
@@ -162,7 +164,7 @@ The application watchdog protects against stuck connection state machines, block
 ### LED Behaviour
 
 When the NTN radio is enabled, the system LED is overridden to clearly signal NTN acquisition status:
-- Solid Green: NTN is searching 
+- Solid Green: NTN is searching
 - Solid Cyan: NTN is successfully registered
 When on Cellular, the LED retains the normal particle behavior (ie blinking green for network registration, breathing cyan once registered and connected to the Particle cloud)
 
@@ -185,7 +187,7 @@ The goal is that you can understand what the modem is doing even when an NTN con
 
 - Satellite acquisition can take significantly longer than LTE attach; the timing-estimate log lines show where the device is in the process. First attach can take ~10 minutes.
 - NTN payloads are limited to **256 bytes** and **1 message per 30 seconds** — the publish layer enforces both.
-- NTN latency per packet is on the order of ~10 seconds per message. 
+- NTN latency per packet is on the order of ~10 seconds per message.
 - A valid location is required before NTN attach.
 - Clear sky view is essential; use the diagnostic output to validate placement.
 
