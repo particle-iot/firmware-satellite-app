@@ -845,6 +845,9 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
             break;
         }
         Log.warn("QISENDEX attempt %d/%d failed: %d", attempt, kMaxSendAttempts, r);
+        if (attempt != kMaxSendAttempts) {
+            delay(10000);
+        }
     }
 #endif
     // Send hex data
