@@ -503,7 +503,7 @@ int Satellite::processCellularTransport() {
             char rxData[320] = "";
             int len = udp_.read((unsigned char*)rxData, sizeof(rxData));
             if (len > 0) {
-                Log.info("%d Bytes Read", len);
+                Log.info("Bytes Read %d", len);
                 handleInboundDatagram(rxData, (size_t)len);
             }
         }
@@ -701,8 +701,13 @@ void Satellite::handleInboundDatagram(char* data, size_t len) {
         char hexBuf[kUdpRxBufferSize * 2 + 1] = {};
         const size_t dumpLen = (len < kUdpRxBufferSize) ? len : kUdpRxBufferSize;
         auto hexLength = toHex(data, dumpLen, hexBuf, sizeof(hexBuf));
-        Log.info("RX %u->%u bytes", (unsigned)len, (unsigned)hexLength);
+        (void) hexLength;
+        Log.info("RX: %u bytes", (unsigned)len);
         Log.trace("%s", hexBuf);
+        // FULL LOGGING
+        //=============
+        // LOG_DUMP(TRACE, hexBuf, dumpLen);
+        // LOG_PRINTF(TRACE, "\r\n");
     }
     // Verify + strip the secure frame before handing the inner payload to the
     // protocol layer. Every non-Ok status drops the datagram (spec §6.2, §7.2),
@@ -820,8 +825,13 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
     }
     memset(hexBuf.get(), 0, hexBufSize);
     auto hexLength = toHex(buf, len, hexBuf.get(), hexBufSize);
-    Log.info("TX %d->%d bytes", len, hexLength);
+    (void) hexLength;
+    Log.info("TX: %d bytes", len);
     Log.trace("%s", (char*)hexBuf.get());
+    // FULL LOGGING
+    //=============
+    // LOG_DUMP(TRACE, (char*)hexBuf.get(), len);
+    // LOG_PRINTF(TRACE, "\r\n");
 
     constexpr int kMaxSendAttempts = 3;
 #if USE_NON_IP
