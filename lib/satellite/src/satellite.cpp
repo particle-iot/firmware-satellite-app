@@ -138,9 +138,17 @@ int Satellite::cbQIRD(int type, const char* buf, int len, char* outBuf) {
   static int incomingPacketLength = 0;
   if (incomingPacketLength == 0) {
     sscanf(buf, "\r\n+QIRD: %d\r\n", &incomingPacketLength);
+    if (incomingPacketLength > (int)kUdpRxBufferSize) {
+      // Never let a large read (e.g. several queued downlinks) overrun the
+      // caller's buffer; receiveData() caps its requests the same way.
+      incomingPacketLength = kUdpRxBufferSize;
+    }
   } else if(outBuf) {
-    // skip the leading "\r\n" in the response and copy the hex data to outBuf for processing
-    memcpy(outBuf, &buf[2], incomingPacketLength);
+    // Receive format is hex (QICFG "dataformat",0,1): the data line after the
+    // leading "\r\n" is hex text, two chars per datagram byte. Copy and
+    // NUL-terminate for hexToBytes() in receiveData().
+    memcpy(outBuf, &buf[2], incomingPacketLength * 2);
+    outBuf[incomingPacketLength * 2] = '\0';
     incomingPacketLength = 0;
   }
 
@@ -559,6 +567,14 @@ int Satellite::connectImpl() {
         r = Cellular.command(150 * 1000, "AT+QIACT=1");
         Cellular.command(2000, "AT+QIACT?");
 
+        // Hex receive mode (send stays text - QISENDEX is hex regardless):
+        // QIRD then returns datagrams as hex text, so payload bytes that look
+        // like line terminators (0x0a/0x0d) cannot shred the AT line parser.
+        // (Observed: a frame whose counter low byte was 0x0a came back
+        // interleaved with fragments of other AT responses.) Volatile modem
+        // setting, so (re)apply on every socket setup.
+        Cellular.command(2000, "AT+QICFG=\"dataformat\",0,1");
+
         r = Cellular.command(150 * 1000, "AT+QIOPEN=1,%d,\"UDP\",\"%u.%u.%u.%u\",%u", UDP_CONNECT_ID,
                 (unsigned)kUdpEndpointIp[0], (unsigned)kUdpEndpointIp[1],
                 (unsigned)kUdpEndpointIp[2], (unsigned)kUdpEndpointIp[3],
@@ -665,29 +681,47 @@ void Satellite::receiveData(void) {
     if (registered_ && connected() && millis() - lastReceivedCheck_ >= SATELLITE_NCP_RECEIVE_UPDATE_MS) {
         lastReceivedCheck_ = millis();
         int recv = 0;
-        char rxData[320] = "";
+        char rxData[kUdpRxBufferSize] = ""; // decoded datagram bytes
         int atResponse = 0;
 
 #if USE_NON_IP
         atResponse = Cellular.command(cbQCFGEXTquery, &recv, 10000, "AT+QCFGEXT=\"nipdr\",0");
+        if ((RESP_OK == atResponse) && (recv > 0)) {
+            atResponse = Cellular.command(cbQCFGEXTread, rxData, 10000, "AT+QCFGEXT=\"nipdr\",%d,1", recv);
+            if ((RESP_OK == atResponse) && recv) {
+                Log.info("Bytes Read %d", recv);
+                handleInboundDatagram(rxData, (size_t)recv);
+            } else {
+                Log.error("Error reading data!");
+            }
+        }
 #else
         Cellular.command(2000, "AT+QISTATE?");
         atResponse = Cellular.command(cbQIRDquery, &recv, 60 * 1000, "AT+QIRD=%d,0", UDP_CONNECT_ID);
-#endif
         if ((RESP_OK == atResponse) && (recv > 0)) {
-#if USE_NON_IP
-            atResponse = Cellular.command(cbQCFGEXTread, rxData, 10000, "AT+QCFGEXT=\"nipdr\",%d,1", recv);
-#else
-            atResponse = Cellular.command(cbQIRD, rxData, 10000, "AT+QIRD=%d,%d", UDP_CONNECT_ID, recv);
-#endif
-            // Receive hex data
-            if ((RESP_OK == atResponse) && recv) {
-                Log.info("%d Bytes Read", recv);
-                handleInboundDatagram(rxData, (size_t)recv);
+            if (recv > (int)kUdpRxBufferSize) {
+                // More buffered than one read carries (e.g. several queued
+                // downlinks); read what fits, the rest is picked up on the
+                // next poll. cbQIRD clamps the same way as a backstop.
+                recv = kUdpRxBufferSize;
+            }
+            // Receive format is hex (QICFG "dataformat",0,1): the response
+            // carries 2 chars per datagram byte; decode before dispatch.
+            char hexData[kUdpRxBufferSize * 2 + 1] = "";
+            atResponse = Cellular.command(cbQIRD, hexData, 10000, "AT+QIRD=%d,%d", UDP_CONNECT_ID, recv);
+            if (RESP_OK == atResponse) {
+                const size_t decoded = hexToBytes(hexData, rxData, sizeof(rxData));
+                Log.info("Bytes Read %d", recv);
+                if (decoded > 0) {
+                    handleInboundDatagram(rxData, decoded);
+                } else {
+                    Log.error("Error decoding RX hex data!");
+                }
             } else {
-                Log.error("ERROR READING DATA!");
+                Log.error("Error reading data!");
             }
         }
+#endif
     }
 }
 
