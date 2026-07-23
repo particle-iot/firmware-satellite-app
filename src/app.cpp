@@ -602,6 +602,10 @@ void loop()
             if (onEntry()) {
                 logStatusLine(true /* forced */);
                 Log.info("SATELLITE BEGIN --------------------");
+                Particle.disconnect();
+                waitFor(Particle.disconnected, 60000);
+                Cellular.disconnect();
+                waitForNot(Cellular.ready, 60000);
                 if (satellite.begin() != SYSTEM_ERROR_NONE) {
                     Log.error("Error initializing Satellite radio");
                     RGB.color(255,0,0);

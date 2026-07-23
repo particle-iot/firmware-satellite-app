@@ -307,16 +307,20 @@ int Satellite::begin() {
         }
     }
 
-    if (Cellular.ready()) {
-        if (Particle.connected()) {
-            return SYSTEM_ERROR_INVALID_STATE;
-        }
+    // We assume this check is already done by the requesting application
+    //
+    //
+    //  if (Particle.connected()) {
+    //      // It seems like we don't need to start up the Satellite connection
+    //      return SYSTEM_ERROR_INVALID_STATE;
+    //  }
 
-        // If disconnected from the cloud but cellular still connected, disconnect.
-        Cellular.disconnect();
-        if (waitForNot(Cellular.ready, 60000)) {
-            return SYSTEM_ERROR_TIMEOUT;
-        }
+    // Ensure cellular is set to disconnected, otherwise when we issue AT+CFUN=0
+    // or other +C*REG: URCs pop up, Device OS may try to start up a PPP connection
+    Cellular.disconnect();
+    if (!waitForNot(Cellular.ready, 60000)) {
+        Log.info("Timeout, Cellular is still connected for over 60s!");
+        return SYSTEM_ERROR_TIMEOUT;
     }
 
     waitAtResponse(10); // Check if the module is alive
