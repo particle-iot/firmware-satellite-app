@@ -46,8 +46,18 @@ enum class AppState {
     SatelliteOnline,   // connected on NTN; publishing on the NTN interval
     SwitchToSatellite, // tear down cloud + cellular, enable the Satellite radio
     SwitchToCellular,  // tear down satellite, enable the Cellular radio
-    Fault              // error / recovery (modem-reset escalation hook)
+    Fault,             // error / recovery (modem-reset escalation hook)
+    ManualIdle         // manually disconnected from Satellite; parked until a manual connect
 };
+
+// Manual control flags, set by ctrl_request_custom_handler() from a USB
+// control request and consumed once per loop() to nudge the state machine
+// above - see the top of loop(). Kept separate from the automatic machine so
+// it stays easy to rebase past upstream changes to that machine.
+static volatile bool manualConnectRequested = false;
+static volatile bool manualDisconnectRequested = false;
+static volatile bool manualPublishRequested = false;
+static particle::Variant manualPublishPayload;
 
 static AppState appState = AppState::Start;
 static bool stateEntry = true;   // true on the first loop() after a transition
@@ -79,6 +89,7 @@ const char* stateName(AppState s) {
         case AppState::SwitchToSatellite: return "SwitchToSatellite";
         case AppState::SwitchToCellular:  return "SwitchToCellular";
         case AppState::Fault:             return "Fault";
+        case AppState::ManualIdle:        return "ManualIdle";
         default:                          return "Unknown";
     }
 }
@@ -436,9 +447,45 @@ void logStatusLine(bool force = false) {
     Log.info("%s", line);
 }
 
-// App specific USB requests
+// App specific USB requests. Manual control ops (see the flags above) just set
+// a flag for loop() to act on next tick and ack immediately; everything else
+// (board_config / FQC / ping) goes to the normal RequestHandler unchanged.
+//   particle usb send-request '{"op":"connect"}'
+//   particle usb send-request '{"op":"disconnect"}'
+//   particle usb send-request '{"op":"publish","payload":{"cmd":"test"}}'
 void ctrl_request_custom_handler(ctrl_request* req) {
-    particle::RequestHandler::instance()->process(req);
+    String reqData(req->request_data, req->request_size);
+    particle::Variant reqVar = particle::Variant::fromJSON(reqData.c_str());
+    String op = reqVar.get("op").asString();
+
+    int result = SYSTEM_ERROR_NOT_SUPPORTED;
+    if (op == "connect") {
+        manualConnectRequested = true;
+        result = SYSTEM_ERROR_NONE;
+    } else if (op == "disconnect") {
+        manualDisconnectRequested = true;
+        result = SYSTEM_ERROR_NONE;
+    } else if (op == "publish") {
+        manualPublishPayload = reqVar.get("payload");
+        manualPublishRequested = true;
+        result = SYSTEM_ERROR_NONE;
+    } else {
+        particle::RequestHandler::instance()->process(req);
+        return;
+    }
+    Log.info("ctrl request op='%s' -> result=%d", op.c_str(), result);
+
+    particle::Variant respVar;
+    respVar.set("result", result);
+    String respJson = respVar.toJSON();
+    if (respJson.length()) {
+        if (system_ctrl_alloc_reply_data(req, respJson.length(), nullptr) == 0) {
+            memcpy(req->reply_data, respJson.c_str(), respJson.length());
+        } else {
+            result = SYSTEM_ERROR_NO_MEMORY;
+        }
+    }
+    system_ctrl_set_result(req, result, nullptr, nullptr, nullptr);
 }
 
 void setup()
@@ -589,7 +636,7 @@ void loop()
                 }
             }
             if (Particle.connected()) {
-                runPublishTick();
+                // runPublishTick();
             } else {
                 transitionTo(AppState::CellularConnect);
             }
@@ -636,6 +683,11 @@ void loop()
                 transitionTo(AppState::SwitchToCellular);
                 break;
             }
+            if (manualDisconnectRequested) {
+                manualDisconnectRequested = false;
+                transitionTo(AppState::ManualIdle);
+                break;
+            }
             if (satellite.connected()) {
                 transitionTo(AppState::SatelliteOnline);
             }
@@ -652,10 +704,19 @@ void loop()
                 transitionTo(AppState::SwitchToCellular);
                 break;
             }
+            if (manualDisconnectRequested) {
+                manualDisconnectRequested = false;
+                transitionTo(AppState::ManualIdle);
+                break;
+            }
 
             if (satellite.connected()) {
                 RGB.color(0,255,255);
-                runPublishTick();
+                // runPublishTick();
+                    if (manualPublishRequested) {
+                        manualPublishRequested = false;
+                        publisher.publish("event", manualPublishPayload);
+                    }
             } else {
                 RGB.color(0,255,0);
                 transitionTo(AppState::SatelliteConnect);
@@ -721,6 +782,29 @@ void loop()
             RGB.color(255,0,0);
             delay(5000);
             transitionTo(AppState::Start);
+            break;
+        }
+
+        // --------------------------------------------------------------------
+        // Manually disconnected from Satellite (see manualDisconnectRequested
+        // above); parked here until a manual connect. satellite.process() is
+        // still driven so registration/signal stay current, but connectImpl()
+        // is a no-op since disconnect() left the desired state at DISCONNECT.
+        case AppState::ManualIdle:
+        {
+            if (onEntry()) {
+                satellite.disconnect();
+                satellite.process();
+                updateConnectionTimers();
+                RGB.control(false);
+
+            }
+            satellite.process();
+
+            if (manualConnectRequested) {
+                manualConnectRequested = false;
+                transitionTo(AppState::SatelliteInit);
+            }
             break;
         }
 
