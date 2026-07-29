@@ -602,6 +602,10 @@ void loop()
             if (onEntry()) {
                 logStatusLine(true /* forced */);
                 Log.info("SATELLITE BEGIN --------------------");
+                Particle.disconnect();
+                waitFor(Particle.disconnected, 60000);
+                Cellular.disconnect();
+                waitForNot(Cellular.ready, 60000);
                 if (satellite.begin() != SYSTEM_ERROR_NONE) {
                     Log.error("Error initializing Satellite radio");
                     RGB.color(255,0,0);
@@ -611,6 +615,7 @@ void loop()
             }
 
             satellite.process();
+            updateConnectionTimers();
             transitionTo(AppState::SatelliteConnect);
             break;
         }
@@ -625,6 +630,7 @@ void loop()
             }
 
             satellite.process();
+            updateConnectionTimers();
 
             if (satelliteShouldSwitchToCellular()) {
                 transitionTo(AppState::SwitchToCellular);
@@ -640,20 +646,19 @@ void loop()
         case AppState::SatelliteOnline:
         {
             satellite.process();
-            if (satellite.connected()) {
-                RGB.color(0,255,255);
-            } else {
-                RGB.color(0,255,0);
-                transitionTo(AppState::SatelliteConnect);
-                // no break, allow to fall through and check if we need to switch to cellular
-            }
+            updateConnectionTimers();
 
             if (satelliteShouldSwitchToCellular()) {
                 transitionTo(AppState::SwitchToCellular);
                 break;
             }
+
             if (satellite.connected()) {
+                RGB.color(0,255,255);
                 runPublishTick();
+            } else {
+                RGB.color(0,255,0);
+                transitionTo(AppState::SatelliteConnect);
             }
             break;
         }
@@ -691,6 +696,7 @@ void loop()
             // NOTE: Very important to disconnect Satellite before switching to Cellular
             satellite.disconnect();
             satellite.process();
+            updateConnectionTimers();
             RGB.control(false);
 
             Log.info("RADIO CELLULAR --------------------");

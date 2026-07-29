@@ -33,25 +33,28 @@ LOG_SOURCE_CATEGORY("ncp.client");
 #include <cloud/cloud_new.pb.h>
 
 #define USE_NON_IP 0
-// #define UDP_ENDPOINT_NAME "publish-receiver-udp.particle.io"
-#define UDP_ENDPOINT_NAME "52.5.13.97"
-#if SECURE_UDP_ENABLED
-// Phase 1 secure suite listens on its own UDP port (port-based versioning, §9);
-// the server default is 9932. TODO: confirm the deployed secure ingress
-// host:port before flashing to a real device.
-#define UDP_PORT 9932
-#else
-#define UDP_PORT 40000
-#endif
 #define UDP_CONNECT_ID 0
 
-// Device OS UDP transport (constrained protocol over the normal connection).
-// kUdpEndpointIp must match UDP_ENDPOINT_NAME - the AT path takes the host as
-// a string, the Device OS UDP API takes an IPAddress. The fixed local port
-// keeps the device's NAT mapping stable so cloud downlinks (sent to the
-// source addr:port of the last verified uplink) stay routable between polls.
-static const IPAddress kUdpEndpointIp(52, 5, 13, 97);
-static const uint16_t kUdpLocalPort = 40223;
+// Single source of truth for the UDP endpoint, shared by BOTH transports: the
+// Device OS UDP API takes it as an IPAddress, and the AT path (QIOPEN) formats
+// its host argument from the same octets in place - so the two can never drift
+// apart. Numeric IPs only; a DNS hostname endpoint would need its own
+// resolution step first. kUdpPort is the port the server listens on, paired
+// with its IP - switch both by swapping one comment block. (Phase 1 secure
+// ingress uses its own port, 9932, for port-based versioning, spec §9;
+// TODO: confirm the deployed secure ingress host:port.)
+// static const IPAddress kUdpEndpointIp(13, 219, 177, 65); // debug echo server "publish-receiver-udp.particle.io"
+// static const uint16_t kUdpPort = 40000;                  // debug echo server
+static const IPAddress kUdpEndpointIp(52, 5, 13, 97);       // secure ingress
+static const uint16_t kUdpPort = 9932;                      // secure ingress
+
+// The Device OS UDP socket also binds kUdpPort as its device-side source port
+// (src and dst ports are independent namespaces, so this is safe). A fixed
+// local port keeps the device's NAT mapping stable so cloud downlinks (sent to
+// the source addr:port of the last verified uplink) stay routable between
+// polls, and reusing kUdpPort means it tracks the endpoint block above
+// automatically. The NTN AT path does not bind it: QIOPEN without a local port
+// lets the modem pick an ephemeral one.
 static const size_t kUdpRxBufferSize = 320; // matches the NTN path's rxData[320]
 
 // Canonical on-wire datagram cap for outbound frames on both transports: the
@@ -76,7 +79,7 @@ namespace {
 
 #define SATELLITE_NCP_SERVINGCELL_UPDATE_MS (5000)
 
-#define SATELLITE_NCP_NO_REGISTRATION_MS (540000)
+#define SATELLITE_NCP_NO_REGISTRATION_MS (300000)
 
 #define SATELLITE_NCP_COMM_ERRORS_MAX (3)
 
@@ -135,9 +138,17 @@ int Satellite::cbQIRD(int type, const char* buf, int len, char* outBuf) {
   static int incomingPacketLength = 0;
   if (incomingPacketLength == 0) {
     sscanf(buf, "\r\n+QIRD: %d\r\n", &incomingPacketLength);
+    if (incomingPacketLength > (int)kUdpRxBufferSize) {
+      // Never let a large read (e.g. several queued downlinks) overrun the
+      // caller's buffer; receiveData() caps its requests the same way.
+      incomingPacketLength = kUdpRxBufferSize;
+    }
   } else if(outBuf) {
-    // skip the leading "\r\n" in the response and copy the hex data to outBuf for processing
-    memcpy(outBuf, &buf[2], incomingPacketLength);
+    // Receive format is hex (QICFG "dataformat",0,1): the data line after the
+    // leading "\r\n" is hex text, two chars per datagram byte. Copy and
+    // NUL-terminate for hexToBytes() in receiveData().
+    memcpy(outBuf, &buf[2], incomingPacketLength * 2);
+    outBuf[incomingPacketLength * 2] = '\0';
     incomingPacketLength = 0;
   }
 
@@ -246,19 +257,26 @@ int Satellite::isRegistered() {
     return 0;
 }
 
+// AT+QENG="servingcell" <state> values:
+//   SEARCH  - no cell found yet, not on the network
+//   LIMSRV  - camped on a cell, not yet registered
+//   NOCONN  - camped AND registered, idle mode (no active bearer) - still attached
+//   CONNECT - camped AND registered, active call/data in progress
+static bool ntnRegistered(const char* state) {
+    return strcmp(state, "CONNECT") == 0 || strcmp(state, "NOCONN") == 0;
+}
+
 // Query and parse the serving-cell report into servingCell_.
 int Satellite::queryServingCell() {
     servingCell_ = NtnServingCellInfo{};
     Cellular.command(cbQENG, &servingCell_, 2000, "AT+QENG=\"servingcell\"");
 
-    if (nwConnected_ == NW_CONNECTED_SUCCESS && strcmp(servingCell_.state, "CONNECT") != 0) {
+    if (nwConnected_ == NW_CONNECTED_SUCCESS && !ntnRegistered(servingCell_.state)) {
         proto_.disconnect();
         ntnConnected_ = 0;
         nwConnected_ = NW_CONNECTED_INIT;
-        // do not change state of nwConnectionDesired_ or ntnInit_, connection should come back on its own
-
-        Cellular.command(180000, "AT+CFUN=0");
-        Cellular.command(180000, "AT+CFUN=1");
+        ntnInit_ = 0; // in case we de-registered, make sure NTN is re-initialized
+        // do not change state of nwConnectionDesired_, connection should come back on its own
     }
 
     return servingCell_.state[0] ? 0 : -1;
@@ -297,16 +315,20 @@ int Satellite::begin() {
         }
     }
 
-    if (Cellular.ready()) {
-        if (Particle.connected()) {
-            return SYSTEM_ERROR_INVALID_STATE;
-        }
+    // We assume this check is already done by the requesting application
+    //
+    //
+    //  if (Particle.connected()) {
+    //      // It seems like we don't need to start up the Satellite connection
+    //      return SYSTEM_ERROR_INVALID_STATE;
+    //  }
 
-        // If disconnected from the cloud but cellular still connected, disconnect.
-        Cellular.disconnect();
-        if (waitForNot(Cellular.ready, 60000)) {
-            return SYSTEM_ERROR_TIMEOUT;
-        }
+    // Ensure cellular is set to disconnected, otherwise when we issue AT+CFUN=0
+    // or other +C*REG: URCs pop up, Device OS may try to start up a PPP connection
+    Cellular.disconnect();
+    if (!waitForNot(Cellular.ready, 60000)) {
+        Log.info("Timeout, Cellular is still connected for over 60s!");
+        return SYSTEM_ERROR_TIMEOUT;
     }
 
     waitAtResponse(10); // Check if the module is alive
@@ -445,16 +467,18 @@ int Satellite::beginCellularTransport() {
     }
 
     udp_.setBuffer(kUdpRxBufferSize);
-    if (!udp_.begin(kUdpLocalPort)) {
-        Log.error("UDP begin on port %u failed", (unsigned)kUdpLocalPort);
+    if (!udp_.begin(kUdpPort)) {
+        Log.error("UDP begin on port %u failed", (unsigned)kUdpPort);
         return SYSTEM_ERROR_NETWORK;
     }
     transportMode_ = TransportMode::DEVICEOS_UDP;
     udpStarted_ = true;
     lastUdpReceiveCheck_ = 0;
     proto_.connect();
-    Log.info("Constrained protocol over Device OS UDP started (dst %s:%d, local port %u)",
-        UDP_ENDPOINT_NAME, UDP_PORT, (unsigned)kUdpLocalPort);
+    Log.info("Constrained protocol over Device OS UDP started (dst %u.%u.%u.%u:%u, local port %u)",
+        (unsigned)kUdpEndpointIp[0], (unsigned)kUdpEndpointIp[1],
+        (unsigned)kUdpEndpointIp[2], (unsigned)kUdpEndpointIp[3],
+        (unsigned)kUdpPort, (unsigned)kUdpPort);
     return 0;
 }
 
@@ -487,7 +511,7 @@ int Satellite::processCellularTransport() {
             char rxData[320] = "";
             int len = udp_.read((unsigned char*)rxData, sizeof(rxData));
             if (len > 0) {
-                Log.info("%d Bytes Read", len);
+                Log.info("Bytes Read %d", len);
                 handleInboundDatagram(rxData, (size_t)len);
             }
         }
@@ -499,6 +523,12 @@ int Satellite::processCellularTransport() {
 int Satellite::connect() {
     nwConnectionDesired_ = NW_STATE_CONNECT;
     nwConnected_ = NW_CONNECTED_INIT;
+
+    int cfunVal = -1;
+    if ( RESP_OK == Cellular.command(cbCFUN, &cfunVal, 180000, "AT+CFUN?") && cfunVal != 1 ) {
+        Cellular.command(180000, "AT+CFUN=1");
+    }
+
     return 0;
 }
 
@@ -537,7 +567,18 @@ int Satellite::connectImpl() {
         r = Cellular.command(150 * 1000, "AT+QIACT=1");
         Cellular.command(2000, "AT+QIACT?");
 
-        r = Cellular.command(150 * 1000, "AT+QIOPEN=1,%d,\"UDP\",\"%s\",%d", UDP_CONNECT_ID, UDP_ENDPOINT_NAME, UDP_PORT);
+        // Hex receive mode (send stays text - QISENDEX is hex regardless):
+        // QIRD then returns datagrams as hex text, so payload bytes that look
+        // like line terminators (0x0a/0x0d) cannot shred the AT line parser.
+        // (Observed: a frame whose counter low byte was 0x0a came back
+        // interleaved with fragments of other AT responses.) Volatile modem
+        // setting, so (re)apply on every socket setup.
+        Cellular.command(2000, "AT+QICFG=\"dataformat\",0,1");
+
+        r = Cellular.command(150 * 1000, "AT+QIOPEN=1,%d,\"UDP\",\"%u.%u.%u.%u\",%u", UDP_CONNECT_ID,
+                (unsigned)kUdpEndpointIp[0], (unsigned)kUdpEndpointIp[1],
+                (unsigned)kUdpEndpointIp[2], (unsigned)kUdpEndpointIp[3],
+                (unsigned)kUdpPort);
 
         if (r == RESP_OK) {
             ntnInit_ = 1;
@@ -551,7 +592,7 @@ int Satellite::connectImpl() {
     if (ntnInit_) {
         queryServingCell();
 
-        if (strcmp(servingCell_.state, "CONNECT") == 0) {
+        if (ntnRegistered(servingCell_.state)) {
             ntnConnected_ = 1;
         } else {
             ntnConnected_ = 0;
@@ -562,6 +603,7 @@ int Satellite::connectImpl() {
         int r = proto_.connect();
         if (r < 0) {
             Log.error("CloudProtocol::connect() failed: %d", r);
+            Log.warn("Ensure Satellite::begin() is called before Satellite::connect()");
             nwConnected_ = NW_CONNECTED_FAILED;
             errorCount_++;
             return r;
@@ -579,11 +621,15 @@ int Satellite::disconnect() {
     nwConnected_ = NW_CONNECTED_INIT;
     ntnConnected_ = 0;
     ntnInit_ = 0;
+    registrationUpdateMs_ = SATELLITE_NCP_REGISTRATION_UPDATE_FAST_MS;
+    registered_ = 0;
 
 #if !USE_NON_IP
     Cellular.command(2000, "AT+QICLOSE=%d", UDP_CONNECT_ID);
     Cellular.command(2000, "AT+QIDEACT=1");
 #endif
+
+    Cellular.command(2000, "AT+CFUN=0"); // required to properly end NTN data session
 
     return 0;
 }
@@ -601,7 +647,7 @@ void Satellite::updateRegistration(bool force) {
     }
     lastRegistrationCheck_ = millis();
 
-    int r = isRegistered();
+    int r = isRegistered() && (!servingCell_.state[0] || ntnRegistered(servingCell_.state));
 
     if (r) {
         noRegistrationTimer_ = 0;
@@ -618,8 +664,8 @@ void Satellite::updateRegistration(bool force) {
         } else if (millis() - noRegistrationTimer_ > SATELLITE_NCP_NO_REGISTRATION_MS) {
             // Prolonged no-registration: kick the radio.
             Log.info("No registration for %d minutes, toggling CFUN.", SATELLITE_NCP_NO_REGISTRATION_MS / 60000);
-            Cellular.command(20000, "AT+CFUN=0");
-            Cellular.command(20000, "AT+CFUN=1");
+            Cellular.command(180000, "AT+CFUN=0");
+            Cellular.command(180000, "AT+CFUN=1");
             noRegistrationTimer_ = millis();
         }
     }
@@ -635,29 +681,47 @@ void Satellite::receiveData(void) {
     if (registered_ && connected() && millis() - lastReceivedCheck_ >= SATELLITE_NCP_RECEIVE_UPDATE_MS) {
         lastReceivedCheck_ = millis();
         int recv = 0;
-        char rxData[320] = "";
+        char rxData[kUdpRxBufferSize] = ""; // decoded datagram bytes
         int atResponse = 0;
 
 #if USE_NON_IP
         atResponse = Cellular.command(cbQCFGEXTquery, &recv, 10000, "AT+QCFGEXT=\"nipdr\",0");
+        if ((RESP_OK == atResponse) && (recv > 0)) {
+            atResponse = Cellular.command(cbQCFGEXTread, rxData, 10000, "AT+QCFGEXT=\"nipdr\",%d,1", recv);
+            if ((RESP_OK == atResponse) && recv) {
+                Log.info("Bytes Read %d", recv);
+                handleInboundDatagram(rxData, (size_t)recv);
+            } else {
+                Log.error("Error reading data!");
+            }
+        }
 #else
         Cellular.command(2000, "AT+QISTATE?");
         atResponse = Cellular.command(cbQIRDquery, &recv, 60 * 1000, "AT+QIRD=%d,0", UDP_CONNECT_ID);
-#endif
         if ((RESP_OK == atResponse) && (recv > 0)) {
-#if USE_NON_IP
-            atResponse = Cellular.command(cbQCFGEXTread, rxData, 10000, "AT+QCFGEXT=\"nipdr\",%d,1", recv);
-#else
-            atResponse = Cellular.command(cbQIRD, rxData, 10000, "AT+QIRD=%d,%d", UDP_CONNECT_ID, recv);
-#endif
-            // Receive hex data
-            if ((RESP_OK == atResponse) && recv) {
-                Log.info("%d Bytes Read", recv);
-                handleInboundDatagram(rxData, (size_t)recv);
+            if (recv > (int)kUdpRxBufferSize) {
+                // More buffered than one read carries (e.g. several queued
+                // downlinks); read what fits, the rest is picked up on the
+                // next poll. cbQIRD clamps the same way as a backstop.
+                recv = kUdpRxBufferSize;
+            }
+            // Receive format is hex (QICFG "dataformat",0,1): the response
+            // carries 2 chars per datagram byte; decode before dispatch.
+            char hexData[kUdpRxBufferSize * 2 + 1] = "";
+            atResponse = Cellular.command(cbQIRD, hexData, 10000, "AT+QIRD=%d,%d", UDP_CONNECT_ID, recv);
+            if (RESP_OK == atResponse) {
+                const size_t decoded = hexToBytes(hexData, rxData, sizeof(rxData));
+                Log.info("Bytes Read %d", recv);
+                if (decoded > 0) {
+                    handleInboundDatagram(rxData, decoded);
+                } else {
+                    Log.error("Error decoding RX hex data!");
+                }
             } else {
-                Log.error("ERROR READING DATA!");
+                Log.error("Error reading data!");
             }
         }
+#endif
     }
 }
 
@@ -665,6 +729,20 @@ void Satellite::receiveData(void) {
 // the Device OS UDP poll.
 void Satellite::handleInboundDatagram(char* data, size_t len) {
 #if SECURE_UDP_ENABLED
+    // Log the raw encrypted frame in the same hex format as tx(), so inbound
+    // datagrams (echoes, dupes) can be matched to uplinks by frame counter.
+    {
+        char hexBuf[kUdpRxBufferSize * 2 + 1] = {};
+        const size_t dumpLen = (len < kUdpRxBufferSize) ? len : kUdpRxBufferSize;
+        auto hexLength = toHex(data, dumpLen, hexBuf, sizeof(hexBuf));
+        (void) hexLength;
+        Log.info("RX: %u bytes", (unsigned)len);
+        Log.trace("%s", hexBuf);
+        // FULL LOGGING
+        //=============
+        // LOG_DUMP(TRACE, hexBuf, dumpLen);
+        // LOG_PRINTF(TRACE, "\r\n");
+    }
     // Verify + strip the secure frame before handing the inner payload to the
     // protocol layer. Every non-Ok status drops the datagram (spec §6.2, §7.2),
     // but the modes are logged and counted separately: a storage fault after a
@@ -741,8 +819,11 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
             return SYSTEM_ERROR_FLASH_IO;
         case secure_udp::Status::TooLarge:
         default:
-            Log.error("Secure UDP frame too large (payload=%u bytes, cap=%u)",
-                (unsigned)len, (unsigned)sizeof(secureFrame));
+            Log.error("Secure UDP payload too large (payload=%u, max=%u; wire cap %u minus %u overhead)",
+                (unsigned)len,
+                (unsigned)(sizeof(secureFrame) - secure_udp::kUplinkOverheadBytes),
+                (unsigned)sizeof(secureFrame),
+                (unsigned)secure_udp::kUplinkOverheadBytes);
             return SYSTEM_ERROR_TOO_LARGE;
     }
     // Final wire-size gate: the protocol layer was sized to cap − overhead, so
@@ -762,7 +843,7 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
         // NTN modem (CFUN) recovery in processErrors(), and a UDP failure on
         // the normal connection must not queue a modem reset for the next
         // NTN session.
-        int sent = udp_.sendPacket(buf, len, kUdpEndpointIp, UDP_PORT);
+        int sent = udp_.sendPacket(buf, len, kUdpEndpointIp, kUdpPort);
         if (sent < (int)len) {
             Log.error("UDP sendPacket failed: %d (%u bytes)", sent, (unsigned)len);
             return -1;
@@ -778,8 +859,13 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
     }
     memset(hexBuf.get(), 0, hexBufSize);
     auto hexLength = toHex(buf, len, hexBuf.get(), hexBufSize);
-    Log.info("TX %d->%d bytes", len, hexLength);
+    (void) hexLength;
+    Log.info("TX: %d bytes", len);
     Log.trace("%s", (char*)hexBuf.get());
+    // FULL LOGGING
+    //=============
+    // LOG_DUMP(TRACE, (char*)hexBuf.get(), len);
+    // LOG_PRINTF(TRACE, "\r\n");
 
     constexpr int kMaxSendAttempts = 3;
 #if USE_NON_IP
@@ -793,6 +879,9 @@ int Satellite::tx(const uint8_t* buf, size_t len, int port) {
             break;
         }
         Log.warn("QISENDEX attempt %d/%d failed: %d", attempt, kMaxSendAttempts, r);
+        if (attempt != kMaxSendAttempts) {
+            delay(10000);
+        }
     }
 #endif
     // Send hex data
