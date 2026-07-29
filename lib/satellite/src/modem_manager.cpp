@@ -78,14 +78,16 @@ namespace {
 // Profiles are identified by their ES10c profileName (tag 92), not by ICCID prefix:
 // Twilio (IE Cellular) and Skylo (IE NTN) share the prefix 898830, and the extra
 // disambiguating digit is coincidental. Update these if a profile's name changes.
-#define PROFILE_NAME_CELLULAR   "Twilio"        // IE Cellular (Twilio) profileName
-#define PROFILE_NAME_SATELLITE  "Pod ENO"       // IE NTN (Skylo) profileName
-#define ICCID_RESULTS_MAX       (8)
-#define ICCID_MARKER            "5A0A"
-#define ICCID_MARKER_LEN        (4)
-#define ICCID_DISABLE           (0)
-#define ICCID_ENABLE            (1)
-#define PROFILE_NAME_TAG        "92"            // ES10c profileName TLV tag
+#define PROFILE_NAME_CELLULAR    "Twilio"        // IE Cellular (Twilio) profileName
+#define PROFILE_NAME_SATELLITE1  "Pod ENO"       // IE NTN (Skylo) profileName
+#define PROFILE_NAME_SATELLITE2  "M27"           // IE NTN (Skylo) profileName
+#define ICCID_RESULTS_MAX        (8)
+#define ICCID_MARKER             "5A0A"
+#define ICCID_MARKER_LEN         (4)
+#define ICCID_DISABLE            (0)
+#define ICCID_ENABLE             (1)
+#define PROFILE_NAME_TAG         "92"            // ES10c profileName TLV tag
+#define PROFILE_NAME_LEN_MAX     (32)            // longest expected ES10c profileName
 
 const int PROFILES_SIZE_MAX = 4096;
 char profiles[PROFILES_SIZE_MAX] = {0};
@@ -569,21 +571,19 @@ int ModemManager::esimDisable(char* specifiedIccid) {
 radio_type_t ModemManager::radioTypeForName(const char* name) {
     if (strcmp(name, PROFILE_NAME_CELLULAR) == 0) {
         return RADIO_CELLULAR;
-    } else if (strcmp(name, PROFILE_NAME_SATELLITE) == 0) {
+    } else if (strcmp(name, PROFILE_NAME_SATELLITE1) == 0 || strcmp(name, PROFILE_NAME_SATELLITE2) == 0) {
         return RADIO_SATELLITE;
     }
     return RADIO_UNKNOWN;
 }
 
 int ModemManager::findIccidByType(const char* inputBuffer, int inputBufferLen, char* matchedIccid, int radioType) {
-    // inputBuffer holds "[ICCID, name, status]" entries (see esimProfiles). Match on
-    // the profile name and return that profile's ICCID.
-    const char* targetName = (radioType == RADIO_CELLULAR)  ? PROFILE_NAME_CELLULAR :
-                             (radioType == RADIO_SATELLITE) ? PROFILE_NAME_SATELLITE : NULL;
-    if (!targetName) {
+    // inputBuffer holds "[ICCID, name, status]" entries (see esimProfiles). Classify each
+    // profile name with radioTypeForName() and return the ICCID of the first profile
+    // matching the requested radio type.
+    if (radioType != RADIO_CELLULAR && radioType != RADIO_SATELLITE) {
         return -1;
     }
-    int targetLen = strlen(targetName);
 
     const char* p = inputBuffer;
     while ((p = strchr(p, '[')) != NULL) {
@@ -602,7 +602,14 @@ int ModemManager::findIccidByType(const char* inputBuffer, int inputBufferLen, c
             continue;
         }
 
-        if ((nameEnd - nameStart) == targetLen && strncmp(nameStart, targetName, targetLen) == 0) {
+        char name[PROFILE_NAME_LEN_MAX + 1] = {0};
+        int nameLen = nameEnd - nameStart;
+        if (nameLen > PROFILE_NAME_LEN_MAX) {
+            nameLen = PROFILE_NAME_LEN_MAX;        // truncated name won't match any known profile
+        }
+        strncpy(name, nameStart, nameLen);
+
+        if (radioTypeForName(name) == radioType) {
             int len = iccidEnd - p;
             if (len >= inputBufferLen) {
                 len = inputBufferLen - 1;
