@@ -63,6 +63,7 @@ All runtime behaviour is defined in a single top-level `env.json` file. Workbenc
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
+| `SERIAL_WAIT_TIMEOUT_S` | uint | `10` | Seconds to wait at boot for a USB host to open the serial port before continuing, so a serial monitor attached in time can see early boot logs. |
 | `INITIAL_ONLINE_TIMEOUT_S` | uint | `0` | If `> 0`, connect to the Particle cloud once at boot. Stays online for this many seconds, then disconnect and proceed to the normal startup flow. Useful to ensure the cloud can update device state and environment variables. Can be 0 when if setting PARTICLE_LOCATION_FIXED directly, or when using setup.particle.io.
 | `FEATURE_LTE_ENABLED` | bool | `false` | Allow LTE-M as a connectivity stack. |
 | `FEATURE_NTN_ENABLED` | bool | `true` | Allow Satellite NTN as a connectivity stack. At least one of the two `FEATURE_*_ENABLED` flags must be true; LTE will be enabled if both are false. |
