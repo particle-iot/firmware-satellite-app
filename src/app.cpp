@@ -443,7 +443,9 @@ void ctrl_request_custom_handler(ctrl_request* req) {
 
 void setup()
 {
-    waitFor(Serial.isConnected, 10000);
+    int serialWaitTimeoutS = 10;
+    System.getEnv("SERIAL_WAIT_TIMEOUT_S", serialWaitTimeoutS);
+    waitFor(Serial.isConnected, serialWaitTimeoutS * 1000);
     // WiFi.clearCredentials(); // force testing on Cellular/Satellite
 
     pinMode(D7, OUTPUT);
