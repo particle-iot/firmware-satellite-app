@@ -31,6 +31,7 @@ typedef enum {
 
 #define ICCID_LEN               (20)
 #define PROFILE_NAME_MAX        (65)    // SGP.22 profileName is <= 64 bytes, +1 for NUL
+#define NOTIF_SEQ_HEX_MAX       (9)     // notification seqNumber in hex, up to 4 bytes, +1 for NUL
 
 typedef enum {
     ENABLE_DISABLE_SUCCESS                         = 0,
@@ -54,6 +55,7 @@ public:
     int esimProfiles(char* specifiedIccid, char* profilesBuffer, int profilesBufferLen);
     radio_type_t radioEnabled();
     int radioEnable(radio_type_t radio_type);
+    int esimClearNotifications();
 
 private:
 
@@ -82,6 +84,16 @@ private:
     int openSimChannel();                                                  // MANAGE CHANNEL open + SELECT ISD-R
     int closeSimChannel();                                                 // MANAGE CHANNEL close
     int storeProfileState(int type, const char* iccidNibbleSwapped, bool refresh); // ES10c Enable/Disable APDU (no CFUN)
+
+    // ES10b notification helpers
+    // HTTPS in the background. These discard them locally instead.
+    static int tlvNext(const char* hex, int hexLen, int pos, unsigned int* tag, int* valPos,
+            int* valLen, int* nextPos);                                        // walk one ASCII-hex TLV
+    int listNotificationSeqs(char seqList[][NOTIF_SEQ_HEX_MAX], int maxCount);  // ES10b.ListNotification (BF28)
+    int parseNotificationSeqs(const char* respHex, char seqList[][NOTIF_SEQ_HEX_MAX],
+            int maxCount);                                                     // seqNumbers from a BF28 response
+    int removeNotification(const char* seqHex);                                // ES10b.RemoveNotificationFromList (BF30)
+    int sweepNotifications();                                                  // list + delete, channel must be open
     int refreshModem(int radioType);                                       // single CFUN cycle (+ iotopmode)
     bool verifyActiveIccid(const char* expectedIccid, unsigned int tries);
     bool profileExists(const char* targetIccid);

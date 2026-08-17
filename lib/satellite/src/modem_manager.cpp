@@ -89,10 +89,22 @@ namespace {
 #define PROFILE_NAME_TAG         "92"            // ES10c profileName TLV tag
 #define PROFILE_NAME_LEN_MAX     (32)            // longest expected ES10c profileName
 
+#define NOTIFICATIONS_MAX        (8)             // notifications parsed per ListNotification pass
+#define NOTIF_SWEEP_PASSES       (8)             // list+delete rounds; one GET RESPONSE holds ~4 entries
+
 const int PROFILES_SIZE_MAX = 4096;
 char profiles[PROFILES_SIZE_MAX] = {0};
 const int CSIM_RESPONSE_SIZE_MAX = 4096;
 char csimResponse[CSIM_RESPONSE_SIZE_MAX] = {0};
+
+// Value of the ASCII-hex byte pair at p, or -1 if p does not hold two hex digits.
+int hexByteValue(const char* p) {
+    if (!isxdigit((unsigned char)p[0]) || !isxdigit((unsigned char)p[1])) {
+        return -1;
+    }
+    char byteStr[3] = { p[0], p[1], 0 };
+    return (int)strtol(byteStr, NULL, 16);
+}
 
 } // namespace annonymous
 
@@ -325,6 +337,233 @@ int ModemManager::storeProfileState(int type, const char* iccidNibbleSwapped, bo
     return r;
 }
 
+int ModemManager::tlvNext(const char* hex, int hexLen, int pos, unsigned int* tag, int* valPos,
+        int* valLen, int* nextPos) {
+    // Walk one BER-TLV inside an ASCII-hex string. Handles the two-byte tags used by
+    // SGP.22 (BF28, BF2F, BF30) and both long-form lengths ('81 xx' and '82 xx xx').
+    if (pos + 4 > hexLen) {
+        return -1;
+    }
+    int t = hexByteValue(hex + pos);
+    if (t < 0) {
+        return -1;
+    }
+    unsigned int tagValue = (unsigned int)t;
+    const bool constructed = ((t & 0x20) != 0);
+    pos += 2;
+
+    if ((t & 0x1F) == 0x1F) {
+        if (pos + 2 > hexLen) {
+            return -1;
+        }
+        int t2 = hexByteValue(hex + pos);
+        if (t2 < 0) {
+            return -1;
+        }
+        tagValue = (tagValue << 8) | (unsigned int)t2;
+        pos += 2;
+    }
+
+    if (pos + 2 > hexLen) {
+        return -1;
+    }
+    int len = hexByteValue(hex + pos);
+    if (len < 0) {
+        return -1;
+    }
+    pos += 2;
+
+    if (len == 0x81) {                             // long form, one length byte follows
+        if (pos + 2 > hexLen) {
+            return -1;
+        }
+        len = hexByteValue(hex + pos);
+        if (len < 0) {
+            return -1;
+        }
+        pos += 2;
+    } else if (len == 0x82) {                      // long form, two length bytes follow.
+        if (pos + 4 > hexLen) {                    // The eUICC uses this for BF28 and A0
+            return -1;                             // once a few notifications are pending.
+        }
+        int hi = hexByteValue(hex + pos);
+        int lo = hexByteValue(hex + pos + 2);
+        if (hi < 0 || lo < 0) {
+            return -1;
+        }
+        len = (hi << 8) | lo;
+        pos += 4;
+    } else if (len > 0x82) {
+        return -1; // longer lengths never appear in a notification list
+    }
+
+    if (pos + (len * 2) > hexLen) {
+        // One GET RESPONSE returns at most 256 bytes, so a long list arrives truncated.
+        // Containers are clamped to what is present so their complete children can still
+        // be read, while a truncated primitive is rejected: half a seqNumber would delete
+        // the wrong notification.
+        if (!constructed) {
+            return -1;
+        }
+        len = (hexLen - pos) / 2;
+    }
+
+    *tag = tagValue;
+    *valPos = pos;
+    *valLen = len;
+    *nextPos = pos + (len * 2);
+    return 0;
+}
+
+int ModemManager::listNotificationSeqs(char seqList[][NOTIF_SEQ_HEX_MAX], int maxCount) {
+    // ES10b.ListNotification (SGP.22 5.7.9), no filter, so every pending notification
+    // is listed: AT+CSIM=16,"81E2910003BF2800" -> +CSIM: 4,"61XX", then GET RESPONSE.
+    int available = -1;
+    Cellular.command(cbCSIMint, &available, 10000, "AT+CSIM=16,\"81E2910003BF2800\"");
+    if (available < 0) {
+        Log.error("ListNotification: no response length");
+        return SYSTEM_ERROR_PROTOCOL;
+    }
+
+    char requestData[32] = {0};
+    memset(&csimResponse, 0, sizeof(csimResponse));
+    snprintf(requestData, sizeof(requestData), "AT+CSIM=10,\"81C00000%02X\"", available);
+    Cellular.command(cbCSIMstring, csimResponse, requestData);
+
+    return parseNotificationSeqs(csimResponse, seqList, maxCount);
+}
+
+int ModemManager::parseNotificationSeqs(const char* respHex, char seqList[][NOTIF_SEQ_HEX_MAX],
+        int maxCount) {
+    // ListNotificationResponse is either
+    //   BF28 { A0 { BF2F { 80 seqNumber, 81 event, 0C address, 5A iccid } ... } }  or
+    //   BF28 { 81 listNotificationsResultError }
+    // Only seqNumber is needed to delete a notification, and it is the first field of
+    // every NotificationMetadata, so nothing else is decoded.
+    int hexLen = strlen(respHex);
+    unsigned int tag = 0;
+    int valPos = 0;
+    int valLen = 0;
+    int next = 0;
+
+    if (tlvNext(respHex, hexLen, 0, &tag, &valPos, &valLen, &next) != 0 || tag != 0xBF28) {
+        Log.error("ListNotification: unexpected response");
+        return SYSTEM_ERROR_BAD_DATA;
+    }
+
+    int pos = valPos;
+    int end = valPos + (valLen * 2);
+    if (tlvNext(respHex, end, pos, &tag, &valPos, &valLen, &next) != 0) {
+        return 0; // no list at all, nothing is pending
+    }
+    if (tag != 0xA0) {
+        Log.error("ListNotification failed, tag 0x%X", tag);
+        return SYSTEM_ERROR_NOT_ALLOWED;
+    }
+    pos = valPos;
+    end = valPos + (valLen * 2);
+
+    int count = 0;
+    while (pos < end && count < maxCount) {
+        if (tlvNext(respHex, end, pos, &tag, &valPos, &valLen, &next) != 0) {
+            break; // truncated tail; the next sweep pass picks up what is left
+        }
+        pos = next;
+        if (tag != 0xBF2F) {
+            continue; // NotificationMetadata entries only
+        }
+
+        // seqNumber [0] INTEGER, kept as hex so it is echoed back to the eUICC verbatim
+        unsigned int seqTag = 0;
+        int seqPos = 0;
+        int seqLen = 0;
+        int seqNext = 0;
+        if (tlvNext(respHex, valPos + (valLen * 2), valPos, &seqTag, &seqPos, &seqLen, &seqNext) != 0 ||
+                seqTag != 0x80 || seqLen <= 0 || (seqLen * 2) >= NOTIF_SEQ_HEX_MAX) {
+            continue;
+        }
+        strncpy(seqList[count], respHex + seqPos, seqLen * 2);
+        seqList[count][seqLen * 2] = 0;
+        count++;
+    }
+
+    return count;
+}
+
+int ModemManager::removeNotification(const char* seqHex) {
+    // ES10b.RemoveNotificationFromList (SGP.22 5.7.11): BF30 { 80 <seqNumber> }, wrapped
+    // in a STORE DATA APDU: 81E29100 <len> BF30 <len> 80 <len> <seqNumber>.
+    // Best effort: the NotificationSentResponse only reports ok / nothingToDelete /
+    // undefinedError, and either way the next sweep pass re-lists what is still pending,
+    // so the response is fetched to keep the channel clean but not decoded.
+    int seqBytes = strlen(seqHex) / 2;
+    if (seqBytes <= 0 || seqBytes > 4) {
+        return SYSTEM_ERROR_INVALID_ARGUMENT;
+    }
+
+    char apdu[64] = {0};
+    snprintf(apdu, sizeof(apdu), "81E29100%02XBF30%02X80%02X%s",
+            seqBytes + 5, seqBytes + 2, seqBytes, seqHex);
+
+    int r = csimCommand(10000, "AT+CSIM=%d,\"%s\"", (int)strlen(apdu), apdu);
+    csimCommand(10000, "AT+CSIM=10,\"81C0000005\""); // GET RESPONSE
+    return r;
+}
+
+int ModemManager::sweepNotifications() {
+    // Caller owns the logical channel. Repeated because one GET RESPONSE returns at most
+    // 256 bytes of the list, which holds roughly four entries, so a long backlog needs
+    // several list+delete rounds to drain.
+    int deleted = 0;
+
+    for (int pass = 0; pass < NOTIF_SWEEP_PASSES; pass++) {
+        char seqList[NOTIFICATIONS_MAX][NOTIF_SEQ_HEX_MAX];
+        memset(seqList, 0, sizeof(seqList));
+
+        int found = listNotificationSeqs(seqList, NOTIFICATIONS_MAX);
+        if (found < 0) {
+            return (deleted > 0) ? deleted : found;
+        }
+        if (found == 0) {
+            return deleted;
+        }
+
+        for (int i = 0; i < found; i++) {
+            if (removeNotification(seqList[i]) == RESP_OK) {
+                deleted++;
+            }
+        }
+    }
+
+    // Ran out of passes with entries still listed, so some deletes are not sticking and
+    // the count above includes retries of the same notifications.
+    Log.warn("eUICC notifications still pending after %d passes", NOTIF_SWEEP_PASSES);
+    return deleted;
+}
+
+int ModemManager::esimClearNotifications() {
+    // FIXME: Clear notifications generated during profile enable and disable until
+    // we understand how to prevent the modem from sending them to the SM-DP+ over HTTPS
+    // in the using the NTN connection.
+    Log.info("Checking for pending eUICC notification(s)...");
+    int r = openSimChannel();
+    if (r != RESP_OK) {
+        Log.error("Could not open eUICC channel to clear notifications: %d", r);
+        return SYSTEM_ERROR_IO;
+    }
+
+    int deleted = sweepNotifications();
+    closeSimChannel();
+
+    if (deleted < 0) {
+        Log.error("Failed to clear eUICC notifications: %d", deleted);
+    } else {
+        Log.info("Cleared %d pending eUICC notification(s)", deleted);
+    }
+
+    return deleted;
+}
+
 int ModemManager::refreshModem(int radioType) {
     // Single modem power cycle so it re-reads the now-active eUICC profile.
     // Sets iotopmode while powered down, unless RADIO_UNKNOWN was specified.
@@ -425,6 +664,7 @@ int ModemManager::enableDisableProfile(int type, char* specifiedIccid, int radio
             if (radioType != RADIO_UNKNOWN) {
                 refreshModem(radioType); // still ensure iotopmode is correct
             }
+            esimClearNotifications();
             return ENABLE_DISABLE_ICCID_IS_ACTIVE;
         }
         strncpy(toEnable, specifiedIccid, ICCID_LEN);
@@ -434,6 +674,7 @@ int ModemManager::enableDisableProfile(int type, char* specifiedIccid, int radio
             if (radioType != RADIO_UNKNOWN) {
                 refreshModem(radioType);
             }
+            esimClearNotifications();
             return ENABLE_DISABLE_ICCID_NOT_ACTIVE;
         }
         strncpy(toDisable, specifiedIccid, ICCID_LEN);
@@ -464,6 +705,8 @@ int ModemManager::enableDisableProfile(int type, char* specifiedIccid, int radio
 
     // --- Single modem refresh adopts the new profile (and sets iotopmode) ---
     refreshModem(radioType);
+
+    esimClearNotifications();
 
     // Verify the switch took effect before reporting success.
     if (toEnable[0] && !verifyActiveIccid(toEnable, /* tries */ 3)) {
