@@ -671,6 +671,7 @@ int ModemManager::enableDisableProfile(int type, char* specifiedIccid, int radio
     });
     int r = openSimChannel();
     if (r != RESP_OK) {
+        Log.error("Failed to open SIM channel. Potentially skipping profile switch.");
         return r;
     }
 
@@ -780,6 +781,7 @@ int ModemManager::esimProfiles(char* specifiedIccid, char* profilesBuffer, int p
     });
     int r = openSimChannel();
     if (r != RESP_OK) {
+        Log.error("Failed to open SIM channel. Skipping refresh of eSIM profiles.");
         return r;
     }
 
