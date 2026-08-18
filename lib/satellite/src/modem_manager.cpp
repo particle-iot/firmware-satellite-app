@@ -89,6 +89,8 @@ namespace {
 #define PROFILE_NAME_TAG         "92"            // ES10c profileName TLV tag
 #define PROFILE_NAME_LEN_MAX     (32)            // longest expected ES10c profileName
 
+#define ISD_R_AID                "A0000005591010FFFFFFFF8900000100"
+
 #define NOTIFICATIONS_MAX        (8)             // notifications parsed per ListNotification pass
 #define NOTIF_SWEEP_PASSES       (8)             // list+delete rounds; one GET RESPONSE holds ~4 entries
 
@@ -108,7 +110,7 @@ int hexByteValue(const char* p) {
 
 } // namespace annonymous
 
-ModemManager::ModemManager() : begun_(false) {
+ModemManager::ModemManager() : begun_(false), simChannel_(-1) {
 
 }
 
@@ -307,18 +309,42 @@ int ModemManager::csimCommand(unsigned int timeoutMs, const char* format, ...) {
     return r;
 }
 
+int ModemManager::simIsoCla() {
+    return simChannel_;
+}
+
+int ModemManager::simGpCla() {
+    // GlobalPlatform commands (STORE DATA, GET RESPONSE) set bit 0x80 on top of it.
+    return simChannel_ | 0x80;
+}
+
 int ModemManager::openSimChannel() {
-    // MANAGE CHANNEL (open) then SELECT the ISD-R applet on logical channel 01.
-    int r = csimCommand(10000, "AT+CSIM=10,\"0070000000\"");
+    // MANAGE CHANNEL (open) then SELECT the ISD-R applet on that channel
+    simChannel_ = -1;
+    memset(&csimResponse, 0, sizeof(csimResponse));
+    int r = Cellular.command(cbCSIMstring, csimResponse, 10000, "AT+CSIM=10,\"0070000000\"");
     if (r != RESP_OK) {
         return r;
     }
-    return csimCommand(10000, "AT+CSIM=42,\"01A4040410A0000005591010FFFFFFFF8900000100\"");
+
+    int channel = hexByteValue(csimResponse);
+    if (channel < 1 || channel > 3) {
+        Log.error("MANAGE CHANNEL open returned %s", csimResponse);
+        return SYSTEM_ERROR_PROTOCOL;
+    }
+    simChannel_ = channel;
+
+    return csimCommand(10000, "AT+CSIM=42,\"%02XA4040410" ISD_R_AID "\"", simIsoCla());
 }
 
 int ModemManager::closeSimChannel() {
-    // MANAGE CHANNEL (close) logical channel 01.
-    return csimCommand(10000, "AT+CSIM=10,\"0070800100\"");
+    // MANAGE CHANNEL (close) on the channel opened above
+    if (simChannel_ < 1) {
+        return SYSTEM_ERROR_NONE;
+    }
+    int r = csimCommand(10000, "AT+CSIM=10,\"007080%02X00\"", simChannel_);
+    simChannel_ = -1;
+    return r;
 }
 
 int ModemManager::storeProfileState(int type, const char* iccidNibbleSwapped, bool refresh) {
@@ -328,12 +354,13 @@ int ModemManager::storeProfileState(int type, const char* iccidNibbleSwapped, bo
     // refresh after all profile changes.
     //   AT+CSIM=50,"81E2910014BF3<1|2>11A00F5A0A<iccid>8101<refresh>"
     int r = csimCommand(10000,
-            "AT+CSIM=50,\"81E2910014BF3%c11A00F5A0A%s8101%02X\"",
+            "AT+CSIM=50,\"%02XE2910014BF3%c11A00F5A0A%s8101%02X\"",
+            simGpCla(),
             type == ICCID_ENABLE ? '1' : '2',
             iccidNibbleSwapped,
             refresh ? 0x01 : 0x00);
     delay(1000); // allow the eUICC to process before GET RESPONSE
-    csimCommand(10000, "AT+CSIM=10,\"81C0000006\""); // GET RESPONSE
+    csimCommand(10000, "AT+CSIM=10,\"%02XC0000006\"", simGpCla()); // GET RESPONSE
     return r;
 }
 
@@ -341,6 +368,7 @@ int ModemManager::tlvNext(const char* hex, int hexLen, int pos, unsigned int* ta
         int* valLen, int* nextPos) {
     // Walk one BER-TLV inside an ASCII-hex string. Handles the two-byte tags used by
     // SGP.22 (BF28, BF2F, BF30) and both long-form lengths ('81 xx' and '82 xx xx').
+    // NOTE: Three-byte tags are not decoded.
     if (pos + 4 > hexLen) {
         return -1;
     }
@@ -393,8 +421,9 @@ int ModemManager::tlvNext(const char* hex, int hexLen, int pos, unsigned int* ta
         }
         len = (hi << 8) | lo;
         pos += 4;
-    } else if (len > 0x82) {
-        return -1; // longer lengths never appear in a notification list
+    } else if (len == 0x80 || len > 0x82) {
+        // 0x80, the indefinite length, and longer definite lengths are not supported
+        return -1;
     }
 
     if (pos + (len * 2) > hexLen) {
@@ -419,7 +448,7 @@ int ModemManager::listNotificationSeqs(char seqList[][NOTIF_SEQ_HEX_MAX], int ma
     // ES10b.ListNotification (SGP.22 5.7.9), no filter, so every pending notification
     // is listed: AT+CSIM=16,"81E2910003BF2800" -> +CSIM: 4,"61XX", then GET RESPONSE.
     int available = -1;
-    Cellular.command(cbCSIMint, &available, 10000, "AT+CSIM=16,\"81E2910003BF2800\"");
+    Cellular.command(cbCSIMint, &available, 10000, "AT+CSIM=16,\"%02XE2910003BF2800\"", simGpCla());
     if (available < 0) {
         Log.error("ListNotification: no response length");
         return SYSTEM_ERROR_PROTOCOL;
@@ -427,7 +456,7 @@ int ModemManager::listNotificationSeqs(char seqList[][NOTIF_SEQ_HEX_MAX], int ma
 
     char requestData[32] = {0};
     memset(&csimResponse, 0, sizeof(csimResponse));
-    snprintf(requestData, sizeof(requestData), "AT+CSIM=10,\"81C00000%02X\"", available);
+    snprintf(requestData, sizeof(requestData), "AT+CSIM=10,\"%02XC00000%02X\"", simGpCla(), available);
     Cellular.command(cbCSIMstring, csimResponse, requestData);
 
     return parseNotificationSeqs(csimResponse, seqList, maxCount);
@@ -495,18 +524,20 @@ int ModemManager::removeNotification(const char* seqHex) {
     // in a STORE DATA APDU: 81E29100 <len> BF30 <len> 80 <len> <seqNumber>.
     // Best effort: the NotificationSentResponse only reports ok / nothingToDelete /
     // undefinedError, and either way the next sweep pass re-lists what is still pending,
-    // so the response is fetched to keep the channel clean but not decoded.
+    // so the response is fetched to keep the channel clean but not decoded. It is
+    // BF30 03 80 01 <status>, so 6 bytes, and asking for fewer leaves the card holding
+    // the remainder with SW 61XX.
     int seqBytes = strlen(seqHex) / 2;
     if (seqBytes <= 0 || seqBytes > 4) {
         return SYSTEM_ERROR_INVALID_ARGUMENT;
     }
 
     char apdu[64] = {0};
-    snprintf(apdu, sizeof(apdu), "81E29100%02XBF30%02X80%02X%s",
-            seqBytes + 5, seqBytes + 2, seqBytes, seqHex);
+    snprintf(apdu, sizeof(apdu), "%02XE29100%02XBF30%02X80%02X%s",
+            simGpCla(), seqBytes + 5, seqBytes + 2, seqBytes, seqHex);
 
     int r = csimCommand(10000, "AT+CSIM=%d,\"%s\"", (int)strlen(apdu), apdu);
-    csimCommand(10000, "AT+CSIM=10,\"81C0000005\""); // GET RESPONSE
+    csimCommand(10000, "AT+CSIM=10,\"%02XC0000006\"", simGpCla()); // GET RESPONSE
     return r;
 }
 
@@ -585,16 +616,16 @@ bool ModemManager::verifyActiveIccid(const char* expectedIccid, unsigned int tri
 
 bool ModemManager::profileExists(const char* targetIccid) {
     // QUERY ALL PROFILES and check the target ICCID is present.
-    Cellular.command(10000, "AT+CSIM=42,\"01A4040410A0000005591010FFFFFFFF8900000100\"");  // returns +CSIM: 4,"6121"
-    int profileSize = 0;
-    Cellular.command(cbCSIMint, &profileSize, 10000, "AT+CSIM=28,\"81E2910009BF2D065C045A9F7092\""); // returns +CSIM: 4,"614E"
-    if (profileSize <= 0) {
+    int profileSize = -1; // '61 00' means 256 bytes, so 0 is a valid length
+    Cellular.command(cbCSIMint, &profileSize, 10000, "AT+CSIM=28,\"%02XE2910009BF2D065C045A9F7092\"",
+            simGpCla()); // returns +CSIM: 4,"614E"
+    if (profileSize < 0) {
         return false;
     }
 
     char requestData[32] = {0};
     memset(&csimResponse, 0, sizeof(csimResponse));
-    snprintf(requestData, sizeof(requestData), "AT+CSIM=10,\"81C00000%02X\"", profileSize);
+    snprintf(requestData, sizeof(requestData), "AT+CSIM=10,\"%02XC00000%02X\"", simGpCla(), profileSize);
     Cellular.command(cbCSIMstring, csimResponse, requestData);
     if (strlen(csimResponse) == 0) {
         return false;
@@ -635,6 +666,14 @@ int ModemManager::enableDisableProfile(int type, char* specifiedIccid, int radio
         radioType = RADIO_UNKNOWN;
     }
 
+    SCOPE_GUARD({
+        closeSimChannel(); // ensure channel is closed. May be called multiple times safely.
+    });
+    int r = openSimChannel();
+    if (r != RESP_OK) {
+        return r;
+    }
+
     // Validate the requested profile actually exists. Skipped on the
     // radioEnable() fast path, which already selected the ICCID from the live
     // profile list, so we don't dump+parse all profiles twice per switch.
@@ -655,9 +694,7 @@ int ModemManager::enableDisableProfile(int type, char* specifiedIccid, int radio
     if (type == ICCID_ENABLE) {
         if (strncmp(iccid, specifiedIccid, ICCID_LEN) == 0) {
             Log.info("Profile already active!");
-            openSimChannel();
             esimClearNotifications();
-            closeSimChannel();
             if (radioType != RADIO_UNKNOWN) {
                 refreshModem(radioType); // still ensure iotopmode is correct
             }
@@ -667,9 +704,7 @@ int ModemManager::enableDisableProfile(int type, char* specifiedIccid, int radio
     } else { // ICCID_DISABLE
         if (strncmp(iccid, specifiedIccid, ICCID_LEN) != 0) {
             Log.info("Profile not active!");
-            openSimChannel();
             esimClearNotifications();
-            closeSimChannel();
             if (radioType != RADIO_UNKNOWN) {
                 refreshModem(radioType);
             }
@@ -684,7 +719,6 @@ int ModemManager::enableDisableProfile(int type, char* specifiedIccid, int radio
     char padded[ICCID_LEN + 2] = {0};
     char swapped[ICCID_LEN + 1] = {0};
 
-    openSimChannel();
     if (toDisable[0]) {
         strncpy(padded, toDisable, ICCID_LEN);
         padded[ICCID_LEN] = 0;
@@ -698,9 +732,13 @@ int ModemManager::enableDisableProfile(int type, char* specifiedIccid, int radio
         padIccidF(padded);
         swapNibbles(padded, swapped);
         storeProfileState(ICCID_ENABLE, swapped, /* refresh */ true);
+    
+        // changing the profile with refresh: true closes the channel
+        closeSimChannel();
+        openSimChannel();
     }
+
     esimClearNotifications();
-    closeSimChannel();
 
     // --- Single modem refresh adopts the new profile (and sets iotopmode) ---
     refreshModem(radioType);
@@ -736,16 +774,24 @@ int ModemManager::esimProfiles(char* specifiedIccid, char* profilesBuffer, int p
     getICCID(iccid, /* log results */ false);
 
     // QUERY ALL PROFILES
-    Cellular.command(10000, "AT+CSIM=42,\"01A4040410A0000005591010FFFFFFFF8900000100\"");  // returns +CSIM: 4,"6121"
-    int profileSize = 0;
-    Cellular.command(cbCSIMint, &profileSize, 10000, "AT+CSIM=28,\"81E2910009BF2D065C045A9F7092\""); // returns +CSIM: 4,"614E"
+    int profileSize = -1; // '61 00' means 256 bytes, so 0 is a valid length
+    SCOPE_GUARD({
+        closeSimChannel();
+    });
+    int r = openSimChannel();
+    if (r != RESP_OK) {
+        return r;
+    }
+
+    Cellular.command(cbCSIMint, &profileSize, 10000, "AT+CSIM=28,\"%02XE2910009BF2D065C045A9F7092\"",
+            simGpCla()); // returns +CSIM: 4,"614E"
     int iccidsFound = 0;
     char iccidList[ICCID_RESULTS_MAX][ICCID_LEN + 1];
     char nameList[ICCID_RESULTS_MAX][PROFILE_NAME_MAX];
-    if (profileSize > 0) {
+    if (profileSize >= 0) {
         char requestData[32] = {0};
         memset(&csimResponse, 0, sizeof(csimResponse));
-        sprintf(requestData, "AT+CSIM=10,\"81C00000%02X\"", profileSize);
+        sprintf(requestData, "AT+CSIM=10,\"%02XC00000%02X\"", simGpCla(), profileSize);
         Cellular.command(cbCSIMstring, csimResponse, requestData); // returns +CSIM: 160,"BF2D4BA049E32D5A0A980010325476981032149F700100921B47534D412054532E343820584F5220546573742050726F66696C65E3185A0A988803070000156406669F70010192065477696C696F9000"
         LOG_PRINTF_C(TRACE, "app", "%010lu [%s] D[%d]: ", millis(), "app", strlen(csimResponse));
         LOG_WRITE_C(TRACE, "app", csimResponse, strlen(csimResponse));

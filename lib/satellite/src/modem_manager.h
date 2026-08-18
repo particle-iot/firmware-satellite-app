@@ -55,12 +55,12 @@ public:
     int esimProfiles(char* specifiedIccid, char* profilesBuffer, int profilesBufferLen);
     radio_type_t radioEnabled();
     int radioEnable(radio_type_t radio_type);
-    int esimClearNotifications();
 
 private:
 
     bool begun_; // true if begin() previously called
     radio_type_t cachedRadioType_;
+    int simChannel_; // logical channel the card allocated, -1 when no channel is open
 
     static int cbCFUN(int type, const char* buf, int len, int* cfun);
     static int cbIOTOPMODE(int type, const char* buf, int len, int* mode);
@@ -81,9 +81,12 @@ private:
 
     // Low-level eUICC (ES10) helpers, composed by enableDisableProfile().
     int csimCommand(unsigned int timeoutMs, const char* format, ...);
+    int simIsoCla();                                                       // CLA for SELECT on the open channel
+    int simGpCla();                                                        // CLA for STORE DATA / GET RESPONSE
     int openSimChannel();                                                  // MANAGE CHANNEL open + SELECT ISD-R
     int closeSimChannel();                                                 // MANAGE CHANNEL close
     int storeProfileState(int type, const char* iccidNibbleSwapped, bool refresh); // ES10c Enable/Disable APDU (no CFUN)
+    int esimClearNotifications();
 
     // ES10b notification helpers
     static int tlvNext(const char* hex, int hexLen, int pos, unsigned int* tag, int* valPos,
