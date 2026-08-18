@@ -86,7 +86,6 @@ private:
     int storeProfileState(int type, const char* iccidNibbleSwapped, bool refresh); // ES10c Enable/Disable APDU (no CFUN)
 
     // ES10b notification helpers
-    // HTTPS in the background. These discard them locally instead.
     static int tlvNext(const char* hex, int hexLen, int pos, unsigned int* tag, int* valPos,
             int* valLen, int* nextPos);                                        // walk one ASCII-hex TLV
     int listNotificationSeqs(char seqList[][NOTIF_SEQ_HEX_MAX], int maxCount);  // ES10b.ListNotification (BF28)

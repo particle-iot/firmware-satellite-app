@@ -546,11 +546,14 @@ int ModemManager::esimClearNotifications() {
     // we understand how to prevent the modem from sending them to the SM-DP+ over HTTPS
     // in the using the NTN connection.
     Log.info("Checking for pending eUICC notification(s)...");
-    int r = openSimChannel();
-    if (r != RESP_OK) {
-        Log.error("Could not open eUICC channel to clear notifications: %d", r);
+    if (openSimChannel() != RESP_OK) {
+        Log.error("Could not open eUICC channel to clear notifications");
         return SYSTEM_ERROR_IO;
     }
+    SCOPE_GUARD({
+        closeSimChannel();
+    });
+
 
     int deleted = sweepNotifications();
     closeSimChannel();
