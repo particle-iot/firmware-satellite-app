@@ -546,17 +546,8 @@ int ModemManager::esimClearNotifications() {
     // we understand how to prevent the modem from sending them to the SM-DP+ over HTTPS
     // in the using the NTN connection.
     Log.info("Checking for pending eUICC notification(s)...");
-    if (openSimChannel() != RESP_OK) {
-        Log.error("Could not open eUICC channel to clear notifications");
-        return SYSTEM_ERROR_IO;
-    }
-    SCOPE_GUARD({
-        closeSimChannel();
-    });
-
 
     int deleted = sweepNotifications();
-    closeSimChannel();
 
     if (deleted < 0) {
         Log.error("Failed to clear eUICC notifications: %d", deleted);
@@ -664,20 +655,24 @@ int ModemManager::enableDisableProfile(int type, char* specifiedIccid, int radio
     if (type == ICCID_ENABLE) {
         if (strncmp(iccid, specifiedIccid, ICCID_LEN) == 0) {
             Log.info("Profile already active!");
+            openSimChannel();
+            esimClearNotifications();
+            closeSimChannel();
             if (radioType != RADIO_UNKNOWN) {
                 refreshModem(radioType); // still ensure iotopmode is correct
             }
-            esimClearNotifications();
             return ENABLE_DISABLE_ICCID_IS_ACTIVE;
         }
         strncpy(toEnable, specifiedIccid, ICCID_LEN);
     } else { // ICCID_DISABLE
         if (strncmp(iccid, specifiedIccid, ICCID_LEN) != 0) {
             Log.info("Profile not active!");
+            openSimChannel();
+            esimClearNotifications();
+            closeSimChannel();
             if (radioType != RADIO_UNKNOWN) {
                 refreshModem(radioType);
             }
-            esimClearNotifications();
             return ENABLE_DISABLE_ICCID_NOT_ACTIVE;
         }
         strncpy(toDisable, specifiedIccid, ICCID_LEN);
@@ -704,12 +699,11 @@ int ModemManager::enableDisableProfile(int type, char* specifiedIccid, int radio
         swapNibbles(padded, swapped);
         storeProfileState(ICCID_ENABLE, swapped, /* refresh */ true);
     }
+    esimClearNotifications();
     closeSimChannel();
 
     // --- Single modem refresh adopts the new profile (and sets iotopmode) ---
     refreshModem(radioType);
-
-    esimClearNotifications();
 
     // Verify the switch took effect before reporting success.
     if (toEnable[0] && !verifyActiveIccid(toEnable, /* tries */ 3)) {
