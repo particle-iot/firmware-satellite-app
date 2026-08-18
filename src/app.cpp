@@ -676,6 +676,7 @@ void loop()
             Particle.disconnect();
             waitFor(Particle.disconnected, 60000);
             Cellular.disconnect();
+            waitForNot(Cellular.ready, 60000);
 
             Log.info("RADIO SATELLITE --------------------");
             if (modem.radioEnable(RADIO_SATELLITE) == SYSTEM_ERROR_NONE) {
