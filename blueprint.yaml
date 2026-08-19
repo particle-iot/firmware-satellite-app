@@ -1,9 +1,8 @@
 slug: particle-blueprint-m635e-ntn
 type: Solution
 category: "Device integration and connectivity"
-expertiseLevel: "Advanced"
+expertiseLevel: "Intermediate"
 tags: ["NTN", "Satellite", "Cellular", "Connectivity", "Diagnostics"]
-# TODO: add the blueprint icon at assets/m635e-ntn.svg (and assets/particle-logo.svg)
 icon: assets/m635e-ntn.svg
 gitrepo: https://github.com/particle-iot/blueprint-m635e-ntn
 name: "M635e satellite (NTN) demo"
