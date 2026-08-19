@@ -14,7 +14,7 @@ cloudServices: []
 integrations: []
 supportedDevices:
   - name: M635e
-    link: https://www.particle.io/msom/
+    link: https://store.particle.io/search?type=product&q=M635
 webIdeLink:
 webSetupLink: https://setup.particle.io/?app=blueprint-m635e-ntn
 hardwareDependencies:
