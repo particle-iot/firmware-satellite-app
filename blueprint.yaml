@@ -1,0 +1,62 @@
+slug: particle-blueprint-m635e-ntn
+type: Solution
+category: "Device integration and connectivity"
+expertiseLevel: "Advanced"
+tags: ["NTN", "Satellite", "Cellular", "Connectivity", "Diagnostics"]
+# TODO: add the blueprint icon at assets/m635e-ntn.svg (and assets/particle-logo.svg)
+icon: assets/m635e-ntn.svg
+gitrepo: https://github.com/particle-iot/blueprint-m635e-ntn
+name: "M635e satellite (NTN) demo"
+shortDescription: Satellite NTN fallback for LTE connectivity for the M635e
+version: 1.0.0
+models: []
+language: ["C++"]
+cloudServices: []
+integrations: []
+supportedDevices:
+  - name: M635e
+    link: https://www.particle.io/msom/
+webIdeLink:
+webSetupLink: https://setup.particle.io/?app=blueprint-m635e-ntn
+hardwareDependencies:
+  - name: Particle M635e (M-SoM with NTN support)
+  - name: NTN-capable antenna
+introduction: |
+  This blueprint demonstrates satellite (NTN) connectivity for the Particle M635e.
+ 
+  It can be configured in several modes: permanent satellite connection, cellular first then satellite fallback, or force switching between cellular and satellite, all the while publishing events to the Particle cloud.
+  
+  It also doubles as an NTN diagnostic tool: verbose serial output reports satellite signal quality, eSIM profile switches, state transitions, and publish results, so you can evaluate satellite connectivity and antenna placement empirically.
+description: |
+  The M635e NTN blueprint demonstrates hybrid cellular (LTE-M) and satellite (NTN) connectivity on the Particle M635e, including eSIM profile switching between the LTE and NTN profiles.
+
+  Key Features:
+  - NTN (satellite) operation at a fixed location without GNSS
+  - Periodic publishing in both NTN and LTE-M mode
+  - LTE to NTN fallback when LTE publishes fail beyond a configured timeout or LTE connectivity is unavailable
+  - NTN to LTE recovery via periodic LTE retry
+  - eSIM profile switching between the LTE and NTN profiles
+  - A single publish abstraction that routes to LTE or NTN automatically, centralizing rate limiting (1 message / 30 s on NTN) and payload sizing (256-byte NTN limit)
+  - Verbose serial diagnostics for signal quality, satellite acquisition, state transitions, publish results, and timing estimates
+  - Simulated LTE loss mode for testing fallback without leaving coverage
+
+  All runtime behavior is configured through a single top-level `env.json` file, which Particle Workbench builds into the application binary as environment variables. The shipped configuration is NTN-first, so satellite behavior is demonstrated immediately. Switch to LTE-only, NTN-only, or a hybrid LTE-primary / NTN-fallback deployment pattern by editing `env.json`. NTN attach requires a location fix, which comes either from fixed coordinates or from the onboard GNSS engine.
+
+  Follow the guided instructions at [setup.particle.io](https://setup.particle.io) to install this blueprint and both LTE-M and NTN eSIM profiles on your device.
+  
+  A clear view of the sky is essential for NTN connectivity. Initial satellite registration can take up to 10 minutes.
+
+  LED Behavior:
+  - Solid white: waiting for a serial connection at boot
+  - Solid green: searching for NTN signal
+  - Solid cyan: registered on NTN and connected to the Particle cloud
+  - Blinking green: search for LTE-M cellular signal
+  - Breathing cyan: registered on LTE-M and connected to the Particle cloud
+
+additionalResources:
+  - title: Particle Developer Docs
+    link: https://developer.particle.io/msom/setup/m635e-setup
+  - title: Particle M-SoM datasheet
+    link: https://docs.particle.io/reference/datasheets/m-series/msom-datasheet/
+  - title: Particle Workbench Guide
+    link: https://docs.particle.io/workbench/
