@@ -629,7 +629,7 @@ int Satellite::disconnect() {
     Cellular.command(2000, "AT+QIDEACT=1");
 #endif
 
-    Cellular.command(2000, "AT+CFUN=0"); // required to properly end NTN data session
+    Cellular.command(180000, "AT+CFUN=0"); // required to properly end NTN data session
 
     return 0;
 }
@@ -975,8 +975,8 @@ int Satellite::processErrors() {
     if (errorCount_ >= SATELLITE_NCP_COMM_ERRORS_MAX) {
         Log.error("%d errors, resetting modem!", SATELLITE_NCP_COMM_ERRORS_MAX);
         // reset modem and re-init
-        Cellular.command(20000, "AT+CFUN=0");
-        Cellular.command(20000, "AT+CFUN=1");
+        Cellular.command(180000, "AT+CFUN=0");
+        Cellular.command(180000, "AT+CFUN=1");
         errorCount_ = 0;
         registrationUpdateMs_ = SATELLITE_NCP_REGISTRATION_UPDATE_FAST_MS;
         registered_ = 0;

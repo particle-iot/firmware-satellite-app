@@ -31,6 +31,7 @@ typedef enum {
 
 #define ICCID_LEN               (20)
 #define PROFILE_NAME_MAX        (65)    // SGP.22 profileName is <= 64 bytes, +1 for NUL
+#define NOTIF_SEQ_HEX_MAX       (9)     // notification seqNumber in hex, up to 4 bytes, +1 for NUL
 
 typedef enum {
     ENABLE_DISABLE_SUCCESS                         = 0,
@@ -59,12 +60,14 @@ private:
 
     bool begun_; // true if begin() previously called
     radio_type_t cachedRadioType_;
+    int simChannel_; // logical channel the card allocated, -1 when no channel is open
 
     static int cbCFUN(int type, const char* buf, int len, int* cfun);
     static int cbIOTOPMODE(int type, const char* buf, int len, int* mode);
     static int cbCSIMint(int type, const char* buf, int len, int* csimInt);
     static int cbCSIMstring(int type, const char* buf, int len, char* csimString);
     static int cbICCID(int type, const char* buf, int len, char* iccid);
+    static int cbCPIN(int type, const char* buf, int len, char* code);
 
     int waitAtResponse(unsigned int tries, unsigned int timeout = 3000);
 
@@ -79,9 +82,23 @@ private:
 
     // Low-level eUICC (ES10) helpers, composed by enableDisableProfile().
     int csimCommand(unsigned int timeoutMs, const char* format, ...);
+    int simIsoCla();                                                       // CLA for SELECT on the open channel
+    int simGpCla();                                                        // CLA for STORE DATA / GET RESPONSE
+    bool simReady();                                                       // AT+CPIN? reports READY
+    int waitForSimReady(unsigned int timeoutMs);                           // poll until the card is back after a REFRESH
     int openSimChannel();                                                  // MANAGE CHANNEL open + SELECT ISD-R
     int closeSimChannel();                                                 // MANAGE CHANNEL close
     int storeProfileState(int type, const char* iccidNibbleSwapped, bool refresh); // ES10c Enable/Disable APDU (no CFUN)
+    int esimClearNotifications();
+
+    // ES10b notification helpers
+    static int tlvNext(const char* hex, int hexLen, int pos, unsigned int* tag, int* valPos,
+            int* valLen, int* nextPos);                                        // walk one ASCII-hex TLV
+    int listNotificationSeqs(char seqList[][NOTIF_SEQ_HEX_MAX], int maxCount);  // ES10b.ListNotification (BF28)
+    int parseNotificationSeqs(const char* respHex, char seqList[][NOTIF_SEQ_HEX_MAX],
+            int maxCount);                                                     // seqNumbers from a BF28 response
+    int removeNotification(const char* seqHex);                                // ES10b.RemoveNotificationFromList (BF30)
+    int sweepNotifications();                                                  // list + delete, channel must be open
     int refreshModem(int radioType);                                       // single CFUN cycle (+ iotopmode)
     bool verifyActiveIccid(const char* expectedIccid, unsigned int tries);
     bool profileExists(const char* targetIccid);
