@@ -67,6 +67,7 @@ private:
     static int cbCSIMint(int type, const char* buf, int len, int* csimInt);
     static int cbCSIMstring(int type, const char* buf, int len, char* csimString);
     static int cbICCID(int type, const char* buf, int len, char* iccid);
+    static int cbCPIN(int type, const char* buf, int len, char* code);
 
     int waitAtResponse(unsigned int tries, unsigned int timeout = 3000);
 
@@ -83,6 +84,8 @@ private:
     int csimCommand(unsigned int timeoutMs, const char* format, ...);
     int simIsoCla();                                                       // CLA for SELECT on the open channel
     int simGpCla();                                                        // CLA for STORE DATA / GET RESPONSE
+    bool simReady();                                                       // AT+CPIN? reports READY
+    int waitForSimReady(unsigned int timeoutMs);                           // poll until the card is back after a REFRESH
     int openSimChannel();                                                  // MANAGE CHANNEL open + SELECT ISD-R
     int closeSimChannel();                                                 // MANAGE CHANNEL close
     int storeProfileState(int type, const char* iccidNibbleSwapped, bool refresh); // ES10c Enable/Disable APDU (no CFUN)

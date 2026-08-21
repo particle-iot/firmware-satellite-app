@@ -94,6 +94,10 @@ namespace {
 #define NOTIFICATIONS_MAX        (8)             // notifications parsed per ListNotification pass
 #define NOTIF_SWEEP_PASSES       (8)             // list+delete rounds; one GET RESPONSE holds ~4 entries
 
+#define CPIN_CODE_MAX            (16)            // longest +CPIN: code is "SIM PUK2", +1 for NUL
+#define SIM_READY_POLL_MS        (1000)          // matches device-os CHECK_SIM_CARD_INTERVAL
+#define SIM_READY_TIMEOUT_MS     (10000)         // matches CHECK_SIM_CARD_ATTEMPTS * INTERVAL
+
 const int PROFILES_SIZE_MAX = 4096;
 char profiles[PROFILES_SIZE_MAX] = {0};
 const int CSIM_RESPONSE_SIZE_MAX = 4096;
@@ -101,11 +105,12 @@ char csimResponse[CSIM_RESPONSE_SIZE_MAX] = {0};
 
 // Value of the ASCII-hex byte pair at p, or -1 if p does not hold two hex digits.
 int hexByteValue(const char* p) {
-    if (!isxdigit((unsigned char)p[0]) || !isxdigit((unsigned char)p[1])) {
+    const int h = hexToNibble(p[0]);
+    if (h < 0) {
         return -1;
     }
-    char byteStr[3] = { p[0], p[1], 0 };
-    return (int)strtol(byteStr, NULL, 16);
+    const int l = hexToNibble(p[1]);
+    return (l < 0) ? -1 : (h << 4) | l;
 }
 
 } // namespace annonymous
@@ -158,6 +163,35 @@ int ModemManager::cbICCID(int type, const char* buf, int len, char* iccid) {
             /*nothing*/;
     }
     return WAIT;
+}
+
+int ModemManager::cbCPIN(int type, const char* buf, int len, char* code) {
+    if ((type == TYPE_PLUS) && code) {
+        if (sscanf(buf, "\r\n+CPIN: %15[^\r]\r\n", code) == 1)
+            /*nothing*/;
+    }
+    return WAIT;
+}
+
+bool ModemManager::simReady() {
+    // A card mid-REFRESH answers '+CME ERROR: 14' (SIM busy), which reaches the callback as
+    // TYPE_ERROR with no '+CPIN:' line, so only an explicit READY counts as the card being back.
+    char code[CPIN_CODE_MAX] = {0};
+    int r = Cellular.command(cbCPIN, code, 10000, "AT+CPIN?");
+    return (r == RESP_OK) && (strcmp(code, "READY") == 0);
+}
+
+int ModemManager::waitForSimReady(unsigned int timeoutMs) {
+    system_tick_t start = millis();
+    do {
+        if (simReady()) {
+            return RESP_OK;
+        }
+        delay(SIM_READY_POLL_MS);
+    } while (millis() - start < timeoutMs);
+
+    Log.error("SIM not ready %u ms after REFRESH", timeoutMs);
+    return SYSTEM_ERROR_TIMEOUT;
 }
 
 void ModemManager::swapNibbles(const char* input, char* output) {
@@ -733,10 +767,20 @@ int ModemManager::enableDisableProfile(int type, char* specifiedIccid, int radio
         padIccidF(padded);
         swapNibbles(padded, swapped);
         storeProfileState(ICCID_ENABLE, swapped, /* refresh */ true);
-    
-        // changing the profile with refresh: true closes the channel
+
+        // The enable's REFRESH resets the card and drops every logical channel, so reopen it
         closeSimChannel();
-        openSimChannel();
+        waitForSimReady(SIM_READY_TIMEOUT_MS);
+        r = openSimChannel();
+        if (r != RESP_OK) {
+            // READY and the ISD-R being selectable are not quite the same instant.
+            closeSimChannel();
+            delay(SIM_READY_POLL_MS);
+            r = openSimChannel();
+        }
+        if (r != RESP_OK) {
+            Log.error("Could not reopen eUICC channel after REFRESH");
+        }
     }
 
     esimClearNotifications();
