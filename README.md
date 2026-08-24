@@ -36,7 +36,7 @@ An always-on satellite (NTN) demonstration blueprint for the Particle M635e plat
 ## Quick Start
 
 1. Connect the NTN antenna to the `CELL` connector on the M635e SOM.
-2. Go to [blueprints.particle.io/](https://blueprints.particle.io/m635e-ntn/) and select "Use this blueprint" and then "Deploy to my device"
+2. Go to [blueprints.particle.io/particle-blueprint-m635e-ntn/](https://blueprints.particle.io/particle-blueprint-m635e-ntn/) and select "Use this blueprint" and then "Deploy to my device"
 3. Go through the process at setup.particle.io to configure your device, install the eSIM profiles and finally, this application
 4. Open a serial terminal to view USB Serial debug output ("particle serial monitor" from the CLI). As soon as programming is completed, it will begin to search for NTN satellites and connect to the Particle cloud. The default configuration is **NTN-first / NTN-only publishing**, so satellite behaviour is demonstrated immediately.
 5. Make sure you have a clear view of the sky (outdoors) for the device to connect. Initial Satellite registration can take up to 10 minutes. 
