@@ -29,7 +29,7 @@ An always-on satellite (NTN) demonstration blueprint for the Particle M635e plat
 
 ### Software
 
-- **Device OS 6.4.2** or later
+- **Device OS 6.4.1** or later
 - eSIM profiles for both LTE and NTN installed on the device (profiles may or may not be activated — the application handles both cases). These are installed when going through setup.particle.io
 - Does **not** depend on the Location API
 
